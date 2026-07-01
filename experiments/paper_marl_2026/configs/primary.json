@@ -9,6 +9,7 @@
   "experiment": "mouse-run-run-0701",
   "experiment_spec": "experiments/paper_marl_2026/SPEC.md",
   "finite_guard": true,
+  "fused_agent_rollout": true,
   "log_every": 500,
   "max_attempts": 2,
   "max_steps": 100,

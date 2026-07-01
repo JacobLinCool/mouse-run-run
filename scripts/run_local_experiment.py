@@ -55,6 +55,12 @@ def main() -> None:
     parser.add_argument("--clip-epsilon", type=float)
     parser.add_argument("--entropy-coef", type=float)
     parser.add_argument("--value-coef", type=float)
+    parser.add_argument(
+        "--value-clip",
+        type=float,
+        default=10.0,
+        help="RLlib-style vf_clip_param: per-sample squared value error bound (0 disables).",
+    )
     parser.add_argument("--recurrent-l2-coef", type=float)
     parser.add_argument("--grad-clip", type=float)
     parser.add_argument("--log-every", type=int, default=500)
@@ -66,6 +72,7 @@ def main() -> None:
     parser.add_argument("--cuda-tf32", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--subspace-metric-period", type=int, default=1)
     parser.add_argument("--triton-env-step", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--fused-agent-rollout", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--finite-guard", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-attempts", type=int, default=2)
     parser.add_argument(
@@ -129,6 +136,7 @@ def _worker() -> None:
             clip_epsilon=payload["clip_epsilon"],
             entropy_coef=payload["entropy_coef"],
             value_coef=payload["value_coef"],
+            value_clip=payload["value_clip"],
             recurrent_l2_coef=payload["recurrent_l2_coef"],
             grad_clip=payload["grad_clip"],
             seed=payload["seed"],
@@ -143,6 +151,7 @@ def _worker() -> None:
             cuda_tf32=payload["cuda_tf32"],
             subspace_metric_period=payload["subspace_metric_period"],
             triton_env_step=payload["triton_env_step"],
+            fused_agent_rollout=payload["fused_agent_rollout"],
             finite_guard=payload["finite_guard"],
             experiment_id=payload["experiment"],
             run_id=payload["run_id"],
@@ -378,6 +387,7 @@ class ExperimentRunner:
             "clip_epsilon": self.args.clip_epsilon,
             "entropy_coef": self.args.entropy_coef,
             "value_coef": self.args.value_coef,
+            "value_clip": self.args.value_clip,
             "recurrent_l2_coef": self.args.recurrent_l2_coef,
             "grad_clip": self.args.grad_clip,
             "device": self.args.device,
@@ -389,6 +399,7 @@ class ExperimentRunner:
             "cuda_tf32": self.args.cuda_tf32,
             "subspace_metric_period": self.args.subspace_metric_period,
             "triton_env_step": self.args.triton_env_step,
+            "fused_agent_rollout": self.args.fused_agent_rollout,
             "finite_guard": self.args.finite_guard,
         }
         env = os.environ.copy()
@@ -694,6 +705,7 @@ class ExperimentRunner:
             "clip_epsilon": self.args.clip_epsilon,
             "entropy_coef": self.args.entropy_coef,
             "value_coef": self.args.value_coef,
+            "value_clip": self.args.value_clip,
             "recurrent_l2_coef": self.args.recurrent_l2_coef,
             "grad_clip": self.args.grad_clip,
             "checkpoint_every": self.args.checkpoint_every,
@@ -704,6 +716,7 @@ class ExperimentRunner:
             "cuda_tf32": self.args.cuda_tf32,
             "subspace_metric_period": self.args.subspace_metric_period,
             "triton_env_step": self.args.triton_env_step,
+            "fused_agent_rollout": self.args.fused_agent_rollout,
             "finite_guard": self.args.finite_guard,
         }
 

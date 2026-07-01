@@ -27,6 +27,12 @@ def main() -> None:
     parser.add_argument("--clip-epsilon", type=float)
     parser.add_argument("--entropy-coef", type=float)
     parser.add_argument("--value-coef", type=float)
+    parser.add_argument(
+        "--value-clip",
+        type=float,
+        default=10.0,
+        help="RLlib-style vf_clip_param: per-sample squared value error bound (0 disables).",
+    )
     parser.add_argument("--recurrent-l2-coef", type=float)
     parser.add_argument("--grad-clip", type=float)
     parser.add_argument("--seed", type=int, default=7)
@@ -43,6 +49,7 @@ def main() -> None:
     parser.add_argument("--cuda-tf32", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--subspace-metric-period", type=int, default=1)
     parser.add_argument("--triton-env-step", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--fused-agent-rollout", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--finite-guard", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--checkpoint",
@@ -79,6 +86,7 @@ def main() -> None:
         clip_epsilon=args.clip_epsilon,
         entropy_coef=args.entropy_coef,
         value_coef=args.value_coef,
+        value_clip=args.value_clip,
         recurrent_l2_coef=args.recurrent_l2_coef,
         grad_clip=args.grad_clip,
         seed=args.seed,
@@ -96,6 +104,7 @@ def main() -> None:
         cuda_tf32=args.cuda_tf32,
         subspace_metric_period=args.subspace_metric_period,
         triton_env_step=args.triton_env_step,
+        fused_agent_rollout=args.fused_agent_rollout,
         finite_guard=args.finite_guard,
         resume_from=args.resume_from,
         env=env,

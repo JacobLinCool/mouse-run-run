@@ -37,6 +37,7 @@ def main() -> None:
     parser.add_argument("--cuda-tf32", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--subspace-metric-period", type=int, default=1)
     parser.add_argument("--triton-env-step", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--fused-agent-rollout", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--full-jobs", type=int, default=DEFAULT_FULL_JOBS)
     parser.add_argument("--full-updates", type=int, default=DEFAULT_FULL_UPDATES)
     parser.add_argument("--output", type=Path, default=Path("runs/rtx3090-multiplex-50u.json"))
@@ -65,6 +66,7 @@ def main() -> None:
             "cuda_tf32": args.cuda_tf32,
             "subspace_metric_period": args.subspace_metric_period,
             "triton_env_step": args.triton_env_step,
+            "fused_agent_rollout": args.fused_agent_rollout,
         },
         "projection": {
             "full_jobs": args.full_jobs,
@@ -109,6 +111,7 @@ def _worker() -> None:
             cuda_tf32=payload["cuda_tf32"],
             subspace_metric_period=payload["subspace_metric_period"],
             triton_env_step=payload["triton_env_step"],
+            fused_agent_rollout=payload["fused_agent_rollout"],
             env=env,
         )
     )
@@ -147,6 +150,7 @@ def _run_concurrency(args: argparse.Namespace, concurrency: int) -> dict[str, An
             "cuda_tf32": args.cuda_tf32,
             "subspace_metric_period": args.subspace_metric_period,
             "triton_env_step": args.triton_env_step,
+            "fused_agent_rollout": args.fused_agent_rollout,
             "checkpoint": str(benchmark_dir / f"seed_{seed:04d}.safetensors"),
         }
         env = os.environ.copy()

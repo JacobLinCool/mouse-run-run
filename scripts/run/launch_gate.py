@@ -20,6 +20,7 @@ PRIMARY_EXPECTATIONS = {
     "device": "cuda",
     "finite_guard": True,
     "triton_env_step": True,
+    "fused_agent_rollout": True,
     "subspace_metric_period": 10,
 }
 
@@ -164,7 +165,14 @@ def _check_device(config: dict[str, Any]) -> dict[str, Any]:
 def _check_triton(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"name": "triton_equivalence", "ok": False, "detail": str(path)}
-    data = _read_json(path)
+    try:
+        data = _read_json(path)
+    except Exception as exc:
+        return {
+            "name": "triton_equivalence",
+            "ok": False,
+            "detail": {"path": str(path), "error": repr(exc)},
+        }
     record_git = data.get("provenance", {}).get("git", {})
     current_git = git_info(Path.cwd())
     record_sha = record_git.get("sha")

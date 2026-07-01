@@ -17,7 +17,7 @@ from mouse_run_run.health import (
     require_healthy_checkpoint,
 )
 from mouse_run_run.observability import TrainingObserver
-from mouse_run_run.policy import RNNActorCritic
+from mouse_run_run.policy import PolicyOutput, RNNActorCritic
 from mouse_run_run.serialization import (
     TrainingState,
     load_checkpoint,
@@ -41,6 +41,11 @@ class TrainConfig:
     clip_epsilon: float = 0.2
     entropy_coef: float = 0.01
     value_coef: float = 0.5
+    # RLlib 2.2's PPO default vf_clip_param, which the official code inherited:
+    # per-sample squared value error is clamped to this bound. Without it the
+    # bootstrapped value targets can chase diverging predictions into overflow
+    # once returns jump (observed with recurrent_l2_coef=0). 0 disables.
+    value_clip: float = 10.0
     recurrent_l2_coef: float = 0.0
     grad_clip: float = 1.0
     seed: int = 7
@@ -58,6 +63,12 @@ class TrainConfig:
     cuda_tf32: bool = True
     subspace_metric_period: int = 1
     triton_env_step: bool = False
+    # Run both agents' rollout forwards as one stacked batch (shared kernels
+    # via gather + bmm). Same math per agent, but kernel fusion changes
+    # floating-point reduction order, so trajectories are not bit-identical
+    # to the unfused path; action sampling stays per-agent to preserve the
+    # RNG stream layout.
+    fused_agent_rollout: bool = False
     finite_guard: bool = True
     experiment_id: str | None = None
     run_id: str | None = None
@@ -373,8 +384,16 @@ def _collect_rollout(
     chaser_subspace_norms: list[torch.Tensor] = []
     explorer_subspace_norms: list[torch.Tensor] = []
     record_subspace_metrics = capture_metrics and config.subspace_metric_period > 0
-    outputs_finite = (
-        torch.ones((), dtype=torch.bool, device=device) if config.finite_guard else None
+    fused_pair = (
+        _FusedAgentPair(
+            chaser,
+            explorer,
+            observation_size=config.env.observation_size,
+            batch_size=batch_size,
+            device=device,
+        )
+        if config.fused_agent_rollout
+        else None
     )
 
     for step_index in range(max_steps):
@@ -386,30 +405,30 @@ def _collect_rollout(
         explorer_position_tensor[step_index].copy_(env.explorer_position)
         partner_visible_tensor[step_index].copy_(partner_visible)
 
-        chaser_output = chaser.forward_one_hot_indices(
-            own_index=chaser_flat_index,
-            other_index=grid_cells + explorer_flat_index,
-            other_visible=partner_visible,
-            hidden=chaser_hidden,
-        )
-        explorer_output = explorer.forward_one_hot_indices(
-            own_index=explorer_flat_index,
-            other_index=grid_cells + chaser_flat_index,
-            other_visible=partner_visible,
-            hidden=explorer_hidden,
-        )
-        if outputs_finite is not None:
-            # Accumulated on-device: a per-step .item() check would force a
-            # GPU sync on every environment step. The flag is inspected once
-            # after the rollout, before any optimizer step can consume it.
-            outputs_finite = outputs_finite & (
-                torch.isfinite(chaser_output.logits).all()
-                & torch.isfinite(chaser_output.value).all()
-                & torch.isfinite(chaser_output.hidden).all()
-                & torch.isfinite(explorer_output.logits).all()
-                & torch.isfinite(explorer_output.value).all()
-                & torch.isfinite(explorer_output.hidden).all()
+        if fused_pair is not None:
+            chaser_output, explorer_output = fused_pair.step(
+                chaser_flat_index,
+                explorer_flat_index,
+                partner_visible,
             )
+        else:
+            chaser_output = chaser.forward_one_hot_indices(
+                own_index=chaser_flat_index,
+                other_index=grid_cells + explorer_flat_index,
+                other_visible=partner_visible,
+                hidden=chaser_hidden,
+            )
+            explorer_output = explorer.forward_one_hot_indices(
+                own_index=explorer_flat_index,
+                other_index=grid_cells + chaser_flat_index,
+                other_visible=partner_visible,
+                hidden=explorer_hidden,
+            )
+        # No per-step finite check here: even the sync-free accumulated-flag
+        # variant costs ~24% of rollout wall time in kernel launches, and a
+        # non-finite hidden/logit necessarily propagates into the stored
+        # log-probs/values that _assert_rollout_finite validates before the
+        # optimizer can consume them.
         chaser_action, chaser_log_prob = _sample_categorical(chaser_output.logits)
         explorer_action, explorer_log_prob = _sample_categorical(explorer_output.logits)
 
@@ -450,13 +469,6 @@ def _collect_rollout(
 
         chaser_hidden = chaser_output.hidden
         explorer_hidden = explorer_output.hidden
-
-    if outputs_finite is not None and not bool(outputs_finite.item()):
-        raise NonFiniteTrainingError(
-            location="rollout",
-            name="policy_outputs",
-            detail="non-finite logits/value/hidden during rollout collection",
-        )
 
     chaser_advantage, chaser_return = _gae(
         rewards=chaser_reward_tensor,
@@ -535,6 +547,88 @@ def _collect_rollout(
 
 def _flat_position(position: torch.Tensor, grid_size: int) -> torch.Tensor:
     return position[:, 0] * grid_size + position[:, 1]
+
+
+class _FusedAgentPair:
+    """Both agents' rollout forwards as one stacked batch.
+
+    The per-agent math is identical to ``forward_one_hot_indices``; stacking
+    replaces 2x (gather + addmm + linear + linear) with one gather and three
+    bmm calls per step, halving kernel launches in the latency-bound rollout
+    loop. Weights are snapshotted once per rollout (they only change in the
+    PPO update, which never overlaps a rollout).
+    """
+
+    def __init__(
+        self,
+        chaser: RNNActorCritic,
+        explorer: RNNActorCritic,
+        *,
+        observation_size: int,
+        batch_size: int,
+        device: torch.device,
+    ) -> None:
+        self.observation_size = observation_size
+        # (2 * observation_size, hidden): rows [0, obs) are the chaser's
+        # W_ih rows, rows [obs, 2*obs) the explorer's.
+        self.input_table = torch.cat(
+            [chaser.rnn.weight_ih_l0.T, explorer.rnn.weight_ih_l0.T], dim=0
+        ).contiguous()
+        self.bias_ih = torch.stack([chaser.rnn.bias_ih_l0, explorer.rnn.bias_ih_l0]).unsqueeze(1)
+        self.weight_hh_t = torch.stack(
+            [chaser.rnn.weight_hh_l0.T, explorer.rnn.weight_hh_l0.T]
+        ).contiguous()
+        self.bias_hh = torch.stack([chaser.rnn.bias_hh_l0, explorer.rnn.bias_hh_l0]).unsqueeze(1)
+        self.action_weight_t = torch.stack(
+            [chaser.action_layer.weight.T, explorer.action_layer.weight.T]
+        ).contiguous()
+        self.action_bias = torch.stack(
+            [chaser.action_layer.bias, explorer.action_layer.bias]
+        ).unsqueeze(1)
+        self.value_weight_t = torch.stack(
+            [chaser.value_layer.weight.T, explorer.value_layer.weight.T]
+        ).contiguous()
+        self.value_bias = torch.stack(
+            [chaser.value_layer.bias, explorer.value_layer.bias]
+        ).unsqueeze(1)
+        self.hidden_size = chaser.hidden_size
+        self.hidden = torch.zeros(2, batch_size, self.hidden_size, device=device)
+
+    def step(
+        self,
+        chaser_flat_index: torch.Tensor,
+        explorer_flat_index: torch.Tensor,
+        partner_visible: torch.Tensor,
+    ) -> tuple[PolicyOutput, PolicyOutput]:
+        observation_size = self.observation_size
+        half = observation_size // 2
+        own_index = torch.cat(
+            [chaser_flat_index, observation_size + explorer_flat_index]
+        )
+        other_index = torch.cat(
+            [
+                half + explorer_flat_index,
+                observation_size + half + chaser_flat_index,
+            ]
+        )
+        visible = partner_visible.to(self.input_table.dtype).unsqueeze(1)
+        input_projection = (
+            self.input_table[own_index]
+            + self.input_table[other_index] * visible.repeat(2, 1)
+        ).view(2, -1, self.hidden_size)
+        next_hidden = torch.relu(
+            input_projection
+            + self.bias_ih
+            + torch.bmm(self.hidden, self.weight_hh_t)
+            + self.bias_hh
+        )
+        logits = torch.baddbmm(self.action_bias, next_hidden, self.action_weight_t)
+        values = torch.baddbmm(self.value_bias, next_hidden, self.value_weight_t).squeeze(-1)
+        self.hidden = next_hidden
+        return (
+            PolicyOutput(logits=logits[0], value=values[0], hidden=next_hidden[0]),
+            PolicyOutput(logits=logits[1], value=values[1], hidden=next_hidden[1]),
+        )
 
 
 def _build_grid_observations(
@@ -627,10 +721,15 @@ def _ppo_update(
             advantage=rollout.explorer.advantages,
             clip_epsilon=config.clip_epsilon,
         )
-        value_loss = 0.5 * (
-            (chaser_value - rollout.chaser.returns).square().mean()
-            + (explorer_value - rollout.explorer.returns).square().mean()
-        )
+        chaser_value_error = (chaser_value - rollout.chaser.returns).square()
+        explorer_value_error = (explorer_value - rollout.explorer.returns).square()
+        if config.value_clip > 0:
+            # RLlib-style vf_clip_param: bounds the per-sample value loss so
+            # the value function cannot chase its own bootstrapped targets
+            # into divergence.
+            chaser_value_error = chaser_value_error.clamp(max=config.value_clip)
+            explorer_value_error = explorer_value_error.clamp(max=config.value_clip)
+        value_loss = 0.5 * (chaser_value_error.mean() + explorer_value_error.mean())
         entropy = chaser_entropy.mean() + explorer_entropy.mean()
         policy_loss = chaser_policy_loss + explorer_policy_loss
         recurrent_l2 = config.recurrent_l2_coef * (

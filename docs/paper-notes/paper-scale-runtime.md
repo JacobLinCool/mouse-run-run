@@ -16,19 +16,31 @@ The main chaser/explorer MARL workload is:
 
 ## Measured wall-time projections
 
-From `runs-archive/pre-formal-20260701T193246Z` benchmark records
-(200-update runs at the primary configuration, `subspace_metric_period=10`,
-Triton env step, TF32):
+Current code (2026-07-02 performance round), measured on a rented RTX 4070 Ti
+SUPER, 200-update runs at the primary configuration (`subspace_metric_period=10`,
+Triton env step, fused agent rollout, TF32, finite guard on), concurrency 10:
 
-- RTX 3090, concurrency 10: ~96.9k aggregate env steps/s
-  → all 20 pairs in ~4.6 hours (~9.7k steps/s per pair).
-- RTX 3090 baseline scaling showed concurrency 10 about 10% faster than
-  concurrency 6, hence `"concurrency": 10` in `primary.json`.
-- RTX 4070 Ti SUPER, concurrency 10: projected ~4.9 hours total.
+| variant | agg. steps/s | projected 20-pair total |
+|---|---:|---:|
+| pre-review code (archived opt-v2) | 90.5k | 4.91 h |
+| review fixes (branch-free obs, per-step-guard accumulation) | 108.9k | 4.08 h |
+| + lean finite guard (post-rollout validation only) | 129.6k | 3.43 h |
+| + fused agent rollout (**primary configuration**) | **142.9k** | **3.11 h** |
 
-Per-attempt timeout is 24 h (`attempt_timeout_hours`), roughly 5x the
-expected ~4-5 h upper bound for a single pair under full contention; a hung
-worker fails the attempt rather than stalling the experiment.
+Older reference points from `runs-archive/pre-formal-20260701T193246Z`:
+RTX 3090 at concurrency 10 measured ~96.9k steps/s on the pre-review code
+(~4.6 h projected); c10 was ~10% faster than c6, hence `"concurrency": 10`.
+
+Evaluated and not adopted: `torch.compile` on the fused rollout step (40.2 ms
+vs 38.4 ms eager per c1 rollout — slower), `mode="reduce-overhead"` (CUDA-graph
+aliasing conflict with the recurrent state), and manual whole-rollout CUDA
+graphs (would require an in-place env-state refactor for static addresses;
+bounded upside ~10-15% at c1, less at c10 where ten processes already overlap
+kernel launches).
+
+Per-attempt timeout is 24 h (`attempt_timeout_hours`), far above the ~3-5 h
+expected upper bound for a single pair under full contention; a hung worker
+fails the attempt rather than stalling the experiment.
 
 ## Current execution path
 

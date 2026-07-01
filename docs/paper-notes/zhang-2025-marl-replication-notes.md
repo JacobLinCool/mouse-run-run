@@ -346,6 +346,25 @@ Also implemented (2026-07-02 review round):
 - Seeded, reproducible evaluation and rollout collection; the randomized agent's policy is never sampled, so the RNG stream is stable.
 - Per-agent gradient clipping (a joint norm would couple the two independent agents).
 - Checkpoint training state (optimizer, RNG, update index) and resume-from-checkpoint.
+- RLlib-style value clipping (`value_clip`, default 10.0 = RLlib 2.2's
+  `vf_clip_param` default, which the official code inherited). Empirically
+  necessary: on a 4070 Ti Super, per-agent clipping made `modern_fast`
+  (recurrent L2 = 0) learn fast enough that the bootstrapped value targets
+  chased diverging predictions from ~update 60 into overflow by ~update 190
+  (seed 0); `paper_text` (L2 = 0.3) was stable over 200 updates, but 20,000
+  updates would enter the same fast-learning regime, so the reference clamp
+  is applied everywhere.
+- Fused agent rollout (`fused_agent_rollout`, on in the primary config): both
+  agents' rollout forwards run as one stacked batch (gather + bmm). Bit-exact
+  against the unfused path on CPU fp32 over a full 100-step recurrent horizon;
+  on CUDA with TF32 the reduction order differs, so trajectories are not
+  bit-identical (no run is bit-reproducible on CUDA anyway — cuDNN, TF32).
+  Action sampling stays per-agent to preserve the RNG stream layout.
+- Rollout-time finite guarding relies on the post-rollout validation of stored
+  log-probs/values/advantages/returns (still before any optimizer step); even
+  a sync-free per-step accumulated flag cost ~24% of rollout wall time in
+  kernel launches, and non-finite values necessarily propagate into the
+  validated tensors.
 
 Remaining gaps:
 
