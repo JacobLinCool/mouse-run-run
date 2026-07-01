@@ -3,7 +3,7 @@
   "batch_size": 40,
   "checkpoint_every": 1000,
   "checkpoint_every_seconds": 1800.0,
-  "concurrency": 6,
+  "concurrency": 10,
   "cuda_tf32": true,
   "device": "cuda",
   "experiment": "mouse-run-run-0701",

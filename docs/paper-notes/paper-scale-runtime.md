@@ -14,6 +14,22 @@ The main chaser/explorer MARL workload is:
 - 80,000,000 environment steps per pair
 - 1,600,000,000 environment steps for all 20 pairs
 
+## Measured wall-time projections
+
+From `runs-archive/pre-formal-20260701T193246Z` benchmark records
+(200-update runs at the primary configuration, `subspace_metric_period=10`,
+Triton env step, TF32):
+
+- RTX 3090, concurrency 10: ~96.9k aggregate env steps/s
+  → all 20 pairs in ~4.6 hours (~9.7k steps/s per pair).
+- RTX 3090 baseline scaling showed concurrency 10 about 10% faster than
+  concurrency 6, hence `"concurrency": 10` in `primary.json`.
+- RTX 4070 Ti SUPER, concurrency 10: projected ~4.9 hours total.
+
+Per-attempt timeout is 24 h (`attempt_timeout_hours`), roughly 5x the
+expected ~4-5 h upper bound for a single pair under full contention; a hung
+worker fails the attempt rather than stalling the experiment.
+
 ## Current execution path
 
 Use `scripts/run_local_experiment.py` on the selected CUDA host. This is the
@@ -68,7 +84,9 @@ Expected files:
 
 The runner counts a unit as completed only when the attempt status is
 `completed` and `checkpoints/latest.safetensors` passes finite tensor
-validation. Failed attempts remain in `raw_records.jsonl` and can be retried.
+validation. Genuinely failed attempts remain in `raw_records.jsonl` and can be
+retried up to `max_attempts`; interrupted attempts do not consume attempts and
+resume from the newest checkpoint with training state.
 
 ## Evaluation commands
 
