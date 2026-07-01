@@ -6,7 +6,7 @@
   "concurrency": 10,
   "cuda_tf32": true,
   "device": "cuda",
-  "experiment": "mouse-run-run-0701",
+  "experiment": "mouse-run-run-1",
   "experiment_spec": "experiments/paper_marl_2026/SPEC.md",
   "finite_guard": true,
   "fused_agent_rollout": true,
