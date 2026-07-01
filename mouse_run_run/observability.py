@@ -37,9 +37,9 @@ RNN_TAGS = {
 }
 
 HEALTH_TAGS = {
-    "grad_norm": "health/grad_norm",
+    "chaser_grad_norm": "health/chaser_grad_norm",
+    "explorer_grad_norm": "health/explorer_grad_norm",
     "max_param_abs": "health/max_param_abs",
-    "nonfinite_count": "health/nonfinite_count",
 }
 
 

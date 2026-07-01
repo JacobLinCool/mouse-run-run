@@ -18,6 +18,7 @@ def main() -> None:
     parser.add_argument("--degenerate-threshold-fraction", type=float, default=0.01)
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
     parser.add_argument("--deterministic", action="store_true")
+    parser.add_argument("--seed", type=int, help="RNG seed for reproducible collection.")
     parser.add_argument(
         "--opponent",
         choices=("self_play", "random_chaser", "random_explorer"),
@@ -26,7 +27,7 @@ def main() -> None:
     args = parser.parse_args()
     episodes = args.episodes
     max_steps = args.max_steps
-    analysis_protocol = "custom_rollout_v2"
+    analysis_protocol = "custom_rollout_v3"
     if args.paper_analysis:
         episodes = 25 if episodes is None else episodes
         max_steps = 500 if max_steps is None else max_steps
@@ -46,4 +47,5 @@ def main() -> None:
         degenerate_threshold_fraction=args.degenerate_threshold_fraction,
         analysis_protocol=analysis_protocol,
         command=shlex.join(sys.argv),
+        seed=args.seed,
     )

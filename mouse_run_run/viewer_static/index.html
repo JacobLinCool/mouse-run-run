@@ -633,7 +633,7 @@
         byId("sExplorerVision").textContent = pct(trajectory.summary.explorer_partner_vision);
         byId("sDegenerate").textContent = trajectory.summary.degenerate ? "yes" : "no";
         byId("sStationarySteps").textContent =
-          `${trajectory.summary.chaser_stationary_steps}/${trajectory.summary.explorer_stationary_steps}`;
+          `${trajectory.summary.chaser_stuck_run_steps}/${trajectory.summary.explorer_stuck_run_steps}`;
         renderProbabilities(frame);
         renderEvents(frame);
         renderBadges(frame);

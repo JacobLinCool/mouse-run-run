@@ -19,6 +19,7 @@ def main() -> None:
     parser.add_argument("--stochastic", action="store_true")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--degenerate-threshold-fraction", type=float, default=0.01)
+    parser.add_argument("--seed", type=int, help="RNG seed for reproducible evaluation.")
     parser.add_argument("--json-output", type=Path)
     parser.add_argument(
         "--opponent",
@@ -36,6 +37,7 @@ def main() -> None:
         opponent_mode=args.opponent,
         max_steps=args.max_steps,
         degenerate_threshold_fraction=args.degenerate_threshold_fraction,
+        seed=args.seed,
     )
     print(
         f"episodes={metrics.episodes} "
@@ -62,6 +64,7 @@ def main() -> None:
             "batch_size": args.batch_size,
             "device": args.device,
             "deterministic": not args.stochastic,
+            "seed": args.seed,
             "opponent_mode": args.opponent,
             "max_steps": args.max_steps,
             "degenerate_threshold_fraction": args.degenerate_threshold_fraction,

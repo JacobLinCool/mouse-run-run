@@ -14,6 +14,16 @@ from mouse_run_run.serialization import load_checkpoint, save_rollout
 from mouse_run_run.train import select_device
 
 
+# Tensors aligned with states s_0..s_T (length max_steps + 1 along dim 0).
+STATE_SERIES_KEYS = (
+    "chaser_position",
+    "explorer_position",
+    "distance",
+    "chaser_partner_visible",
+    "explorer_partner_visible",
+)
+
+
 @torch.no_grad()
 def collect_rollouts(
     checkpoint: Path,
@@ -26,9 +36,14 @@ def collect_rollouts(
     opponent_mode: OpponentMode = "self_play",
     max_steps: int | None = None,
     degenerate_threshold_fraction: float = 0.01,
-    analysis_protocol: str = "custom_rollout_v2",
+    analysis_protocol: str = "custom_rollout_v3",
     command: str | None = None,
+    seed: int | None = None,
 ) -> None:
+    if opponent_mode not in ("self_play", "random_chaser", "random_explorer"):
+        raise ValueError(f"Unsupported opponent mode: {opponent_mode}")
+    if seed is not None:
+        torch.manual_seed(seed)
     device = select_device(device_name)
     config, _, chaser_state, explorer_state = load_checkpoint(checkpoint)
     env_config = GridWorldConfig(**config["env"])
@@ -70,7 +85,7 @@ def collect_rollouts(
     save_rollout(
         output,
         metadata={
-            "schema_version": 2,
+            "schema_version": 3,
             "analysis_protocol": analysis_protocol,
             "checkpoint": str(checkpoint),
             "checkpoint_config": config,
@@ -81,6 +96,18 @@ def collect_rollouts(
             "opponent_mode": opponent_mode,
             "max_steps": env_config.max_steps,
             "degenerate_threshold_fraction": degenerate_threshold_fraction,
+            "seed": seed,
+            "alignment": {
+                "state_series": STATE_SERIES_KEYS,
+                "convention": (
+                    "state-series tensors have length max_steps + 1 along dim 0 and"
+                    " index t is the state s_t before action t;"
+                    " observations/hidden/actions at index t are computed from s_t"
+                    " (hidden[t] produced action[t]);"
+                    " rewards and event flags at index t describe the transition"
+                    " s_t -> s_{t+1}"
+                ),
+            },
             "command": command or shlex.join(sys.argv),
         },
         rollout=_concat_chunks(chunks),
@@ -104,8 +131,13 @@ def _collect_batch(
     chaser_observation, explorer_observation = env.reset()
     chaser_hidden = chaser.initial_hidden(batch_size, device)
     explorer_hidden = explorer.initial_hidden(batch_size, device)
-    initial_chaser_position = env.chaser_position.clone()
-    initial_explorer_position = env.explorer_position.clone()
+    initial_chaser_visible, initial_explorer_visible = env.partner_visibilities()
+    # State-series keys are seeded with the s_0 value and get one entry per
+    # step afterwards, so they are (max_steps + 1, episodes, ...) and index t
+    # is the state before action t. All other per-step keys are
+    # (max_steps, episodes, ...) and index t aligns with state s_t
+    # (observations/hidden/actions) or transition s_t -> s_{t+1}
+    # (rewards/events).
     records: dict[str, list[torch.Tensor]] = {
         "chaser_observation": [],
         "explorer_observation": [],
@@ -116,31 +148,36 @@ def _collect_batch(
         "chaser_reward": [],
         "explorer_reward": [],
         "collision": [],
+        "chaser_collision": [],
+        "explorer_collision": [],
         "chaser_new_field": [],
         "explorer_new_field": [],
-        "chaser_partner_visible": [],
-        "explorer_partner_visible": [],
         "chaser_approach": [],
         "explorer_escape": [],
         "explorer_escape_close": [],
         "explorer_escape_near": [],
         "explorer_escape_far": [],
-        "distance": [],
-        "chaser_position": [],
-        "explorer_position": [],
+        "chaser_partner_visible": [initial_chaser_visible],
+        "explorer_partner_visible": [initial_explorer_visible],
+        "distance": [env.distance()],
+        "chaser_position": [env.chaser_position.clone()],
+        "explorer_position": [env.explorer_position.clone()],
     }
 
     for _ in range(env_config.max_steps):
         chaser_output = chaser(chaser_observation, chaser_hidden)
         explorer_output = explorer(explorer_observation, explorer_hidden)
-        chaser_action = _select_action(chaser_output.logits, deterministic)
-        explorer_action = _select_action(explorer_output.logits, deterministic)
+        # The randomized agent's hidden trajectory is still recorded (the
+        # trained network keeps observing), but its policy is never sampled so
+        # the RNG stream only feeds the random opponent.
         if opponent_mode == "random_chaser":
             chaser_action = torch.randint(4, (batch_size,), device=device)
-        elif opponent_mode == "random_explorer":
+        else:
+            chaser_action = _select_action(chaser_output.logits, deterministic)
+        if opponent_mode == "random_explorer":
             explorer_action = torch.randint(4, (batch_size,), device=device)
-        elif opponent_mode != "self_play":
-            raise ValueError(f"Unsupported opponent mode: {opponent_mode}")
+        else:
+            explorer_action = _select_action(explorer_output.logits, deterministic)
 
         result = env.step(chaser_action, explorer_action)
         records["chaser_observation"].append(chaser_observation)
@@ -152,15 +189,17 @@ def _collect_batch(
         records["chaser_reward"].append(result.chaser_reward)
         records["explorer_reward"].append(result.explorer_reward)
         records["collision"].append(result.collision)
+        records["chaser_collision"].append(result.chaser_collision)
+        records["explorer_collision"].append(result.explorer_collision)
         records["chaser_new_field"].append(result.chaser_new_field)
         records["explorer_new_field"].append(result.explorer_new_field)
-        records["chaser_partner_visible"].append(result.chaser_partner_visible)
-        records["explorer_partner_visible"].append(result.explorer_partner_visible)
         records["chaser_approach"].append(result.chaser_approach)
         records["explorer_escape"].append(result.explorer_escape)
         records["explorer_escape_close"].append(result.explorer_escape_close)
         records["explorer_escape_near"].append(result.explorer_escape_near)
         records["explorer_escape_far"].append(result.explorer_escape_far)
+        records["chaser_partner_visible"].append(result.chaser_partner_visible)
+        records["explorer_partner_visible"].append(result.explorer_partner_visible)
         records["distance"].append(result.distance)
         records["chaser_position"].append(result.chaser_position)
         records["explorer_position"].append(result.explorer_position)
@@ -170,16 +209,17 @@ def _collect_batch(
         chaser_observation = result.chaser_observation
         explorer_observation = result.explorer_observation
 
-    tensors = {key: torch.stack(value).cpu() for key, value in records.items()}
+    stacked = {key: torch.stack(value) for key, value in records.items()}
     degeneracy = episode_degeneracy(
-        torch.cat([initial_chaser_position[None], torch.stack(records["chaser_position"])]),
-        torch.cat([initial_explorer_position[None], torch.stack(records["explorer_position"])]),
-        torch.stack(records["chaser_action"]),
-        torch.stack(records["explorer_action"]),
+        stacked["chaser_position"],
+        stacked["explorer_position"],
+        stacked["chaser_action"],
+        stacked["explorer_action"],
+        chaser_collisions=stacked["chaser_collision"],
+        explorer_collisions=stacked["explorer_collision"],
         threshold_fraction=degenerate_threshold_fraction,
     )
-    tensors["episode_initial_chaser_position"] = initial_chaser_position.cpu()
-    tensors["episode_initial_explorer_position"] = initial_explorer_position.cpu()
+    tensors = {key: value.cpu() for key, value in stacked.items()}
     for key, value in degeneracy.items():
         tensors[f"episode_{key}"] = value.cpu()
     return tensors

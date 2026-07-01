@@ -8,9 +8,10 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from mouse_run_run.checkpoint_select import checkpoint_identity, select_checkpoints
 from mouse_run_run.evaluate import evaluate_checkpoint
 from mouse_run_run.health import checkpoint_health
-from mouse_run_run.serialization import CHECKPOINT_FORMAT, load_checkpoint, read_metadata
+from mouse_run_run.serialization import read_checkpoint_metadata
 from mouse_run_run.train import DEVICE_CHOICES
 
 
@@ -27,14 +28,39 @@ def main() -> None:
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--degenerate-threshold-fraction", type=float, default=0.01)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="RNG seed shared by every evaluation, so all checkpoints face the"
+        " same standardized random opponent.",
+    )
+    parser.add_argument(
+        "--all-checkpoints",
+        action="store_true",
+        help="Evaluate every checkpoint under the given directories, including"
+        " mid-training update_* files and failed attempts. Default is the"
+        " latest successful attempt per unit.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-evaluate checkpoints that already have an ok record in the"
+        " output file.",
+    )
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
 
-    checkpoint_paths = list(_checkpoint_paths(args.paths))
+    checkpoint_paths = select_checkpoints(args.paths, all_checkpoints=args.all_checkpoints)
     if args.limit is not None:
         checkpoint_paths = checkpoint_paths[: args.limit]
     if not checkpoint_paths:
         raise SystemExit("no checkpoint safetensors found")
+    already_evaluated = (
+        set()
+        if args.force or args.output is None
+        else _evaluated_keys(args.output)
+    )
 
     output_handle = None
     if args.output is not None:
@@ -43,22 +69,36 @@ def main() -> None:
     try:
         failure_count = 0
         for checkpoint in checkpoint_paths:
+            pending_modes = [
+                mode
+                for mode in PAPER_RANDOM_OPPONENT_MODES
+                if (str(checkpoint), mode) not in already_evaluated
+            ]
+            if not pending_modes:
+                print(f"skipped_already_evaluated={checkpoint}", flush=True)
+                continue
             health = checkpoint_health(checkpoint)
+            config = None
+            checkpoint_metrics = None
+            try:
+                config, checkpoint_metrics = read_checkpoint_metadata(checkpoint)
+            except Exception:
+                pass
             if not health.ok:
                 failure_count += 1
-                for opponent_mode in PAPER_RANDOM_OPPONENT_MODES:
+                for opponent_mode in pending_modes:
                     record = _base_record(
                         checkpoint=checkpoint,
                         args=args,
                         opponent_mode=opponent_mode,
+                        checkpoint_config=config,
                         checkpoint_health=health,
                         status="invalid_checkpoint",
                         error="checkpoint failed finite/format validation",
                     )
                     _write_record(record, output_handle)
                 continue
-            config, checkpoint_metrics, _, _ = load_checkpoint(checkpoint)
-            for opponent_mode in PAPER_RANDOM_OPPONENT_MODES:
+            for opponent_mode in pending_modes:
                 try:
                     metrics = evaluate_checkpoint(
                         checkpoint,
@@ -69,6 +109,7 @@ def main() -> None:
                         opponent_mode=opponent_mode,
                         max_steps=args.max_steps,
                         degenerate_threshold_fraction=args.degenerate_threshold_fraction,
+                        seed=args.seed,
                     )
                 except Exception as exc:
                     failure_count += 1
@@ -101,6 +142,25 @@ def main() -> None:
             output_handle.close()
 
 
+def _evaluated_keys(output: Path) -> set[tuple[str, str]]:
+    """(checkpoint, opponent_mode) pairs that already have an ok record."""
+    if not output.exists():
+        return set()
+    keys: set[tuple[str, str]] = set()
+    with output.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("status") != "ok":
+                continue
+            keys.add((str(record.get("checkpoint")), str(record.get("opponent_mode"))))
+    return keys
+
+
 def _base_record(
     *,
     checkpoint: Path,
@@ -114,11 +174,12 @@ def _base_record(
     error: str | None = None,
 ) -> dict[str, object]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "evaluation_protocol": "paper_random_opponent_v1",
         "created_at": datetime.now(UTC).isoformat(),
         "command": shlex.join(sys.argv),
         "checkpoint": str(checkpoint),
+        **checkpoint_identity(checkpoint_config),
         "checkpoint_config": checkpoint_config,
         "checkpoint_metrics": checkpoint_metrics,
         "checkpoint_health": {
@@ -135,6 +196,7 @@ def _base_record(
         "batch_size": args.batch_size,
         "device": args.device,
         "deterministic": args.deterministic,
+        "seed": args.seed,
         "opponent_mode": opponent_mode,
         "focus_agent": "chaser" if opponent_mode == "random_explorer" else "explorer",
         "max_steps": args.max_steps,
@@ -150,32 +212,6 @@ def _write_record(record: dict[str, object], output_handle: object | None) -> No
         return
     output_handle.write(line + "\n")
     output_handle.flush()
-
-
-def _checkpoint_paths(paths: list[Path]) -> list[Path]:
-    checkpoints: list[Path] = []
-    for path in paths:
-        path = path.expanduser()
-        if path.is_file():
-            _require_checkpoint(path)
-            checkpoints.append(path)
-            continue
-        if not path.is_dir():
-            raise FileNotFoundError(str(path))
-        for candidate in sorted(path.rglob("*.safetensors")):
-            try:
-                metadata = read_metadata(candidate)
-            except Exception:
-                continue
-            if metadata.get("format") == CHECKPOINT_FORMAT:
-                checkpoints.append(candidate)
-    return sorted(dict.fromkeys(checkpoints))
-
-
-def _require_checkpoint(path: Path) -> None:
-    metadata = read_metadata(path)
-    if metadata.get("format") != CHECKPOINT_FORMAT:
-        raise ValueError(f"Unsupported checkpoint format in {path}: {metadata.get('format')}")
 
 
 if __name__ == "__main__":

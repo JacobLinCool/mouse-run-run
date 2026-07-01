@@ -89,9 +89,14 @@ Important official-code mapping:
 - `new field`: an agent enters a tile it has not previously visited in the episode.
 - `approach`: for the chaser, action reduces distance to the explorer's last position.
 - `escape`: for the explorer, action increases distance from the chaser's last position.
-  - `escape_far`: updated distance more than 5 units;
-  - `escape_near`: updated distance 3 to 5 units;
-  - `escape_close`: updated distance less than 3 units.
+  - `escape_far`: updated distance `>= 5` units (official code uses `>=`, not strict);
+  - `escape_near`: updated distance in `[3, 5)`;
+  - `escape_close`: updated distance `< 3`.
+
+Official event precedence (from `_move` early returns): per agent, at most one
+event per step, with priority `collision > own new_field > escape/approach`.
+A step that enters a new field never also emits approach/escape. The modern
+port enforces the same gating.
 
 ### Rewards
 
@@ -212,6 +217,21 @@ For neural-behavior analyses:
 - Each analysis episode lasts 500 timesteps.
 - Exclude degenerate episodes where agents stop moving in the same state or repeat movements within the same tile for more than 1% of episode length.
 
+Degenerate-rule interpretation used by this repo (no official reference
+implementation exists; the official analysis repo contains only MATLAB PLSC
+utilities):
+
+- A step is *stuck* for an agent when it issued a valid action but stayed in
+  the same tile for a non-social reason (wall bump or stationarity).
+  Collision-blocked steps are excluded: collision is the rewarded social
+  outcome, and counting it would flag every successful social episode
+  (a trained chaser collides far more than 1% of steps).
+- "For more than 1% of episode length" is read as a sustained duration: the
+  longest consecutive stuck run must exceed the threshold (strictly), so
+  scattered one-off wall bumps do not accumulate into an exclusion.
+- The episode is excluded when either agent's longest stuck run, or the
+  longest jointly-stuck run, exceeds the threshold.
+
 ## Neural Analyses To Reproduce
 
 ### SVM decoding
@@ -317,13 +337,23 @@ Implemented:
 - Rollout export for hidden states, observations, actions, positions, rewards, collision events, approach/escape events, visibility flags, and new-field events.
 - Safetensors checkpoint and rollout artifacts, with config/metrics stored as JSON metadata.
 
+Also implemented (2026-07-02 review round):
+
+- Official event precedence for approach/escape (gated on collision and own new-field).
+- Per-agent collision flags in step results and rollouts.
+- Degenerate-episode exclusion with the interpretation documented above (longest stuck run, collision-blocked steps excluded).
+- Rollout schema v3 time alignment: state series `(max_steps + 1)` aligned to states, `hidden[t]` produced `action[t]`, events describe transition `t -> t+1`; the alignment convention is stored in rollout metadata.
+- Seeded, reproducible evaluation and rollout collection; the randomized agent's policy is never sampled, so the RNG stream is stable.
+- Per-agent gradient clipping (a joint norm would couple the two independent agents).
+- Checkpoint training state (optimizer, RNG, update index) and resume-from-checkpoint.
+
 Remaining gaps:
 
-- This is not an exact RLlib 2.2 reproduction; PPO defaults and sequence batching differ.
+- This is not an exact RLlib 2.2 reproduction; PPO defaults (KL-penalty PPO) and sequence batching differ — the port uses clipped PPO.
 - It has not yet trained ten independent social/non-social seed pairs.
 - It does not yet implement PLSC, SVM decoding, neural-action-space partner-representation GLMs, or null-space perturbation.
-- Degenerate rollout exclusion is not yet implemented.
-- The L2 regularization discrepancy between paper text (`lambda = 0.3`) and official code/demo params (`3.0`) is not resolved; the modern port defaults to no recurrent L2 unless explicitly configured.
+- The L2 regularization discrepancy between paper text (`lambda = 0.3`) and official code/demo params (`3.0`) is not resolved; the `paper_text` preset uses 0.3, `official_code` uses 3.0 (both as an unsquared Frobenius norm on the recurrent weights, exactly matching the official `custom_loss`).
+- Environment spawn domain is `0..grid_size-1` per paper text; the official code's `np.random.randint(height - 1)` never spawns on the last row/column (likely an off-by-one). This intentional difference changes the initial-state distribution slightly.
 
 Recent smoke result:
 

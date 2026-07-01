@@ -13,6 +13,7 @@ This checklist maps the requested 13 pre-launch items to implementation and veri
 3. Paper-style degenerate episode exclusion
    - Implementation: `mouse_run_run/degenerate.py`, `mouse_run_run/rollout.py`, `scripts/transform/build_tables.py`
    - Rule: raw rollouts are preserved; exclusions are represented in `exclusions.jsonl`.
+   - Interpretation: longest consecutive stuck run (valid action, same tile, collision-blocked steps excluded) strictly exceeding 1% of episode length; see the replication notes.
 
 4. Formal run manifest
    - Implementation: `scripts/run_local_experiment.py`, `mouse_run_run/provenance.py`
@@ -29,10 +30,12 @@ This checklist maps the requested 13 pre-launch items to implementation and veri
 7. Standardized random-opponent eval pipeline
    - Implementation: `evaluate-paper-marl`
    - Output: `runs/{experiment}/paper_random_eval.jsonl`
+   - Selection: latest successful attempt per unit by default; seeded (`--seed`, default 0); already-evaluated checkpoints skipped unless `--force`.
 
 8. 25 x 500 analysis rollout pipeline
    - Implementation: `collect-paper-marl-rollouts`
    - Output: `runs/{experiment}/paper_rollouts/*.safetensors`
+   - Selection and seeding follow the same rules as gate 7; rollout schema v3 records the time-alignment convention in metadata.
 
 9. TensorBoard health dashboard
    - Implementation: `mouse_run_run/observability.py`
@@ -40,7 +43,7 @@ This checklist maps the requested 13 pre-launch items to implementation and veri
 
 10. Rerun policy
     - Implementation: `scripts/run_local_experiment.py`
-    - Failed attempts remain raw evidence and retry up to `max_attempts`.
+    - Genuinely failed attempts remain raw evidence and retry up to `max_attempts`; interrupted attempts do not consume `max_attempts` and resume from the newest healthy checkpoint with training state (bounded by `max_total_attempts`); workers are killed after `attempt_timeout_hours`.
 
 11. Summary report
     - Implementation: `scripts/analysis/summarize_experiment.py`

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from safetensors.torch import load_file
+from safetensors import safe_open
 
 from mouse_run_run.health import checkpoint_health
 from mouse_run_run.provenance import collect_provenance, hash_file, write_json_atomic
@@ -25,7 +25,14 @@ def main() -> None:
     output_root.mkdir(parents=True, exist_ok=True)
 
     runs = _run_rows(experiment_root)
-    evaluations = _jsonl_rows(experiment_root.rglob("*eval*.jsonl"))
+    evaluations = _dedupe_last(
+        _jsonl_rows(experiment_root.rglob("*eval*.jsonl")),
+        key=lambda row: (
+            row.get("checkpoint"),
+            row.get("opponent_mode"),
+            row.get("evaluation_protocol"),
+        ),
+    )
     rollouts, exclusions = _rollout_rows(experiment_root)
     panels = _panels()
 
@@ -109,7 +116,28 @@ def _run_rows(experiment_root: Path) -> list[dict[str, Any]]:
             "config": config,
         }
         rows.append(row)
+    _mark_latest_successful(rows)
     return rows
+
+
+def _mark_latest_successful(rows: list[dict[str, Any]]) -> None:
+    """Set is_latest_successful on the newest valid attempt of each unit.
+
+    This materializes the SPEC's analysis unit ("latest successful finite
+    attempt per unit") as a column so downstream consumers filter on it
+    instead of re-deriving it.
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        row["is_latest_successful"] = False
+        if row.get("status") != "completed" or not row.get("healthy") or not row.get("checkpoint_ok"):
+            continue
+        unit_id = str(row.get("unit_id"))
+        current = latest.get(unit_id)
+        if current is None or str(row.get("attempt_id")) > str(current.get("attempt_id")):
+            latest[unit_id] = row
+    for row in latest.values():
+        row["is_latest_successful"] = True
 
 
 def _jsonl_rows(paths: object) -> list[dict[str, Any]]:
@@ -128,8 +156,27 @@ def _jsonl_rows(paths: object) -> list[dict[str, Any]]:
     return rows
 
 
+def _dedupe_last(
+    rows: list[dict[str, Any]],
+    *,
+    key: Any,
+) -> list[dict[str, Any]]:
+    """Keep only the last record per key, preserving first-seen order.
+
+    Records files are append-only, so re-runs (e.g. --force) append newer
+    records for the same checkpoint; the newest one wins in canonical tables.
+    """
+    deduped: dict[Any, dict[str, Any]] = {}
+    for row in rows:
+        deduped[key(row)] = row
+    return list(deduped.values())
+
+
 def _rollout_rows(experiment_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    records = _jsonl_rows(experiment_root.rglob("*rollout*_records.jsonl"))
+    records = _dedupe_last(
+        _jsonl_rows(experiment_root.rglob("*rollout*_records.jsonl")),
+        key=lambda row: (row.get("checkpoint"), row.get("output")),
+    )
     rows = []
     exclusions = []
     for record in records:
@@ -138,9 +185,15 @@ def _rollout_rows(experiment_root: Path) -> tuple[list[dict[str, Any]], list[dic
         degenerate_count = None
         episode_count = None
         if output.exists() and output.suffix == ".safetensors":
-            tensors = load_file(str(output), device="cpu")
-            if "rollout.episode_degenerate" in tensors:
-                degenerate = tensors["rollout.episode_degenerate"].bool()
+            # Read the single flag tensor instead of the whole rollout file.
+            with safe_open(str(output), framework="pt", device="cpu") as handle:
+                keys = set(handle.keys())
+                degenerate = (
+                    handle.get_tensor("rollout.episode_degenerate").bool()
+                    if "rollout.episode_degenerate" in keys
+                    else None
+                )
+            if degenerate is not None:
                 degenerate_count = int(degenerate.sum().item())
                 episode_count = int(degenerate.numel())
                 if degenerate_count:
@@ -166,7 +219,12 @@ def _panels() -> dict[str, Any]:
         "panels": {
             "primary_valid_runs_v1": {
                 "table": "runs.jsonl",
-                "include": {"status": "completed", "healthy": True, "checkpoint_ok": True},
+                "include": {
+                    "status": "completed",
+                    "healthy": True,
+                    "checkpoint_ok": True,
+                    "is_latest_successful": True,
+                },
                 "unit": "task x seed latest successful attempt",
             },
             "paper_random_opponent_valid_v1": {

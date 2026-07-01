@@ -41,6 +41,8 @@ class StepResult:
     done: torch.Tensor
     active: torch.Tensor
     collision: torch.Tensor
+    chaser_collision: torch.Tensor
+    explorer_collision: torch.Tensor
     chaser_new_field: torch.Tensor
     explorer_new_field: torch.Tensor
     chaser_partner_visible: torch.Tensor
@@ -76,6 +78,8 @@ class _TransitionResult:
     done: torch.Tensor
     active: torch.Tensor
     collision: torch.Tensor
+    chaser_collision: torch.Tensor
+    explorer_collision: torch.Tensor
     chaser_new_field: torch.Tensor
     explorer_new_field: torch.Tensor
     chaser_partner_visible: torch.Tensor
@@ -112,6 +116,8 @@ class BatchedChaseEnv:
         self.explorer_visited = torch.empty_like(self.chaser_visited)
         self.done = torch.empty(batch_size, dtype=torch.bool, device=device)
         self.step_count = torch.empty(batch_size, dtype=torch.long, device=device)
+        self._never_visible = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        self._always_visible = torch.ones(batch_size, dtype=torch.bool, device=device)
 
     def reset_state(self) -> None:
         grid_size = self.config.grid_size
@@ -179,6 +185,8 @@ class BatchedChaseEnv:
             done=transition.done,
             active=transition.active,
             collision=transition.collision,
+            chaser_collision=transition.chaser_collision,
+            explorer_collision=transition.explorer_collision,
             chaser_new_field=transition.chaser_new_field,
             explorer_new_field=transition.explorer_new_field,
             chaser_partner_visible=transition.chaser_partner_visible,
@@ -223,6 +231,13 @@ class BatchedChaseEnv:
 
     def partner_visible(self) -> torch.Tensor:
         return self._partner_visible(self.chaser_position, self.explorer_position)
+
+    def partner_visibilities(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Current-state visibility for (chaser view, explorer view)."""
+        return (
+            self._partner_visible(self.chaser_position, self.explorer_position),
+            self._partner_visible(self.explorer_position, self.chaser_position),
+        )
 
     def _advance(
         self,
@@ -281,8 +296,20 @@ class BatchedChaseEnv:
         old_distance = _euclidean_distance(old_chaser_position, old_explorer_position)
         chaser_partner_distance = _euclidean_distance(self.chaser_position, old_explorer_position)
         explorer_partner_distance = _euclidean_distance(self.explorer_position, old_chaser_position)
-        chaser_approach = active & ~chaser_collision & (chaser_partner_distance < old_distance)
-        explorer_escape = active & ~explorer_collision & (explorer_partner_distance > old_distance)
+        # Official event precedence: collision > own new field > approach/escape.
+        # A step that enters a new field never also emits approach/escape.
+        chaser_approach = (
+            active
+            & ~chaser_collision
+            & ~chaser_new_field
+            & (chaser_partner_distance < old_distance)
+        )
+        explorer_escape = (
+            active
+            & ~explorer_collision
+            & ~explorer_new_field
+            & (explorer_partner_distance > old_distance)
+        )
         explorer_escape_far = explorer_escape & (explorer_partner_distance >= 5.0)
         explorer_escape_near = (
             explorer_escape
@@ -310,6 +337,8 @@ class BatchedChaseEnv:
             done=self.done.clone(),
             active=active,
             collision=collision,
+            chaser_collision=chaser_collision,
+            explorer_collision=explorer_collision,
             chaser_new_field=chaser_new_field,
             explorer_new_field=explorer_new_field,
             chaser_partner_visible=chaser_visible,
@@ -345,15 +374,15 @@ class BatchedChaseEnv:
             own_position[:, 1],
         ] = 1.0
 
+        # Branch-free: writing 0.0 into an already-zero cell is a no-op, and
+        # avoiding the data-dependent branch keeps this free of device syncs.
         visible = self._partner_visible(own_position, other_position)
-        if visible.any():
-            visible_index = self.batch_index[visible]
-            observation[
-                visible_index,
-                1,
-                other_position[visible, 0],
-                other_position[visible, 1],
-            ] = 1.0
+        observation[
+            self.batch_index,
+            1,
+            other_position[:, 0],
+            other_position[:, 1],
+        ] = visible.to(observation.dtype)
 
         return observation.flatten(start_dim=1)
 
@@ -363,9 +392,9 @@ class BatchedChaseEnv:
         other_position: torch.Tensor,
     ) -> torch.Tensor:
         if self.config.partner_visibility == "none":
-            return torch.zeros(self.batch_size, dtype=torch.bool, device=self.device)
+            return self._never_visible
         if self.config.partner_visibility == "full":
-            return torch.ones(self.batch_size, dtype=torch.bool, device=self.device)
+            return self._always_visible
         offset = (own_position - other_position).abs()
         return offset.max(dim=1).values <= self.config.vision_radius
 

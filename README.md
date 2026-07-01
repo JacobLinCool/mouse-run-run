@@ -90,10 +90,23 @@ uv run visualize-marl --runs-root runs --port 8765
 Checkpoints and rollout files use `safetensors`. Config and metrics are stored
 as JSON metadata; model weights and rollout arrays are stored as tensor payloads.
 The rollout file stores hidden states, observations, actions, positions, rewards,
-collision events, approach/escape events, visibility flags, and new field events
-with shapes such as `(timesteps, episodes, hidden_size)`. Analysis rollouts also
-store `episode_degenerate` and stationary-step counts so degenerate episodes can
-be excluded downstream without rewriting raw evidence.
+collision events (joint and per-agent), approach/escape events, visibility flags,
+and new field events. Time alignment (rollout schema v3): state-series tensors
+(`*_position`, `distance`, `*_partner_visible`) have length `max_steps + 1` and
+index `t` is state `s_t`; `observations`/`hidden`/`actions` at index `t` are
+computed from `s_t` (`hidden[t]` produced `action[t]`); rewards and event flags
+at index `t` describe the transition `s_t -> s_{t+1}`. Analysis rollouts also
+store `episode_degenerate` and stuck-run counts so degenerate episodes can be
+excluded downstream without rewriting raw evidence. Degenerate episodes are
+those whose longest consecutive stuck run (stationary with a valid action,
+excluding collision-blocked steps) exceeds 1% of the episode length.
+
+Checkpoints saved with training state (optimizer, RNG, update index) support
+resuming interrupted training:
+
+```bash
+uv run train-marl --updates 20000 ... --resume-from runs/modern-social/checkpoints/update_012000.safetensors
+```
 
 ## Formal Experiment
 
@@ -137,11 +150,22 @@ Each attempt writes artifacts under
 The batch runner treats the trained pair as the experimental unit and the
 attempt as raw evidence. A unit is completed only when `status.json` is
 `completed` and `checkpoints/latest.safetensors` passes finite checkpoint
-validation. Failed attempts are kept in `raw_records.jsonl` and retried up to
-`max_attempts`.
+validation. Genuinely failed attempts (NaN/Inf, crash, invalid checkpoint,
+timeout) are kept in `raw_records.jsonl` and retried up to `max_attempts`.
+Interrupted attempts (runner shutdown, host reboot) do not count toward
+`max_attempts`; the next invocation resumes the unit from the newest healthy
+checkpoint with training state, bounded by `max_total_attempts`. Workers are
+killed after `attempt_timeout_hours` wall-clock hours (0 disables). Re-running
+with `resume: false` refuses to touch a non-empty experiment directory unless
+`--force-fresh` archives it first.
 
 Generate paper-style evaluation, analysis rollouts, canonical tables, and a
-summary report:
+summary report. When given a directory, both tools default to the latest
+successful attempt's `checkpoints/latest.safetensors` per unit (the SPEC's
+analysis unit); pass `--all-checkpoints` to include mid-training `update_*`
+checkpoints, and `--seed` (default 0) makes every checkpoint face the same
+standardized random opponent. Already-evaluated checkpoints are skipped unless
+`--force`:
 
 ```bash
 uv run evaluate-paper-marl runs/mouse-run-run-0701 \

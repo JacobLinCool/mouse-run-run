@@ -234,6 +234,8 @@ def generate_trajectory(
     explorer_positions = [env.explorer_position.clone()]
     chaser_actions = []
     explorer_actions = []
+    chaser_collisions = []
+    explorer_collisions = []
     frames = [
         _frame(
             t=0,
@@ -266,6 +268,8 @@ def generate_trajectory(
         explorer_actions.append(explorer_action.clone())
         chaser_positions.append(result.chaser_position.clone())
         explorer_positions.append(result.explorer_position.clone())
+        chaser_collisions.append(result.chaser_collision.clone())
+        explorer_collisions.append(result.explorer_collision.clone())
         chaser_return += _float(result.chaser_reward)
         explorer_return += _float(result.explorer_reward)
         chaser_movement = _movement(
@@ -334,6 +338,8 @@ def generate_trajectory(
         torch.stack(explorer_positions),
         torch.stack(chaser_actions),
         torch.stack(explorer_actions),
+        chaser_collisions=torch.stack(chaser_collisions),
+        explorer_collisions=torch.stack(explorer_collisions),
         threshold_fraction=0.01,
     )
     return {
@@ -356,9 +362,9 @@ def generate_trajectory(
             "degenerate": _tensor_bool(degeneracy["degenerate"]),
             "degenerate_threshold_fraction": 0.01,
             "degenerate_threshold_steps": _tensor_float(degeneracy["threshold_steps"]),
-            "same_state_steps": _tensor_int(degeneracy["same_state_steps"]),
-            "chaser_stationary_steps": _tensor_int(degeneracy["chaser_stationary_steps"]),
-            "explorer_stationary_steps": _tensor_int(degeneracy["explorer_stationary_steps"]),
+            "same_state_run_steps": _tensor_int(degeneracy["same_state_run_steps"]),
+            "chaser_stuck_run_steps": _tensor_int(degeneracy["chaser_stuck_run_steps"]),
+            "explorer_stuck_run_steps": _tensor_int(degeneracy["explorer_stuck_run_steps"]),
         },
         "action_labels": ACTION_LABELS,
         "frames": frames,

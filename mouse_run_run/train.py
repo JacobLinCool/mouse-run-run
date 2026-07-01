@@ -18,7 +18,12 @@ from mouse_run_run.health import (
 )
 from mouse_run_run.observability import TrainingObserver
 from mouse_run_run.policy import RNNActorCritic
-from mouse_run_run.serialization import save_checkpoint
+from mouse_run_run.serialization import (
+    TrainingState,
+    load_checkpoint,
+    load_training_state,
+    save_checkpoint,
+)
 
 
 DEVICE_CHOICES = ("auto", "cpu", "mps", "cuda")
@@ -57,6 +62,7 @@ class TrainConfig:
     experiment_id: str | None = None
     run_id: str | None = None
     attempt_id: str | None = None
+    resume_from: Path | None = None
     env: GridWorldConfig = GridWorldConfig()
 
 
@@ -76,9 +82,9 @@ class RolloutMetrics:
     value_loss: float
     entropy: float
     approx_kl: float
-    grad_norm: float
+    chaser_grad_norm: float
+    explorer_grad_norm: float
     max_param_abs: float
-    nonfinite_count: float
 
 
 @dataclass(frozen=True)
@@ -162,11 +168,21 @@ def train(
         assert_finite_module(chaser, location="initialization", prefix="chaser")
         assert_finite_module(explorer, location="initialization", prefix="explorer")
 
+    start_update = 1
+    if config.resume_from is not None:
+        start_update = 1 + _restore_training_state(
+            config=config,
+            chaser=chaser,
+            explorer=explorer,
+            optimizer=optimizer,
+            device=device,
+        )
+
     latest_metrics = _empty_metrics()
-    latest_update = 0
+    latest_update = start_update - 1
     last_checkpoint_at = perf_counter()
     try:
-        for update in range(1, config.updates + 1):
+        for update in range(start_update, config.updates + 1):
             latest_update = update
             should_log = _should_log(config, update)
             should_checkpoint = _should_checkpoint(config, update, last_checkpoint_at)
@@ -198,7 +214,16 @@ def train(
             checkpoint_path = None
             if should_checkpoint:
                 checkpoint_path = _checkpoint_path_for_update(config, update)
-                _save_checkpoint(config, chaser, explorer, latest_metrics, path=checkpoint_path)
+                _save_checkpoint(
+                    config,
+                    chaser,
+                    explorer,
+                    latest_metrics,
+                    path=checkpoint_path,
+                    optimizer=optimizer,
+                    update=update,
+                    device=device,
+                )
                 last_checkpoint_at = perf_counter()
                 should_record = True
 
@@ -213,7 +238,15 @@ def train(
                 if snapshot and on_status:
                     on_status(snapshot)
 
-        final_checkpoint = _save_checkpoint(config, chaser, explorer, latest_metrics)
+        final_checkpoint = _save_checkpoint(
+            config,
+            chaser,
+            explorer,
+            latest_metrics,
+            optimizer=optimizer,
+            update=latest_update,
+            device=device,
+        )
         snapshot = observer.record(
             update=latest_update,
             metrics=asdict(latest_metrics),
@@ -340,6 +373,9 @@ def _collect_rollout(
     chaser_subspace_norms: list[torch.Tensor] = []
     explorer_subspace_norms: list[torch.Tensor] = []
     record_subspace_metrics = capture_metrics and config.subspace_metric_period > 0
+    outputs_finite = (
+        torch.ones((), dtype=torch.bool, device=device) if config.finite_guard else None
+    )
 
     for step_index in range(max_steps):
         chaser_flat_index = _flat_position(env.chaser_position, grid_size)
@@ -362,17 +398,17 @@ def _collect_rollout(
             other_visible=partner_visible,
             hidden=explorer_hidden,
         )
-        if config.finite_guard:
-            assert_finite_tensors(
-                {
-                    "chaser_logits": chaser_output.logits,
-                    "chaser_value": chaser_output.value,
-                    "chaser_hidden": chaser_output.hidden,
-                    "explorer_logits": explorer_output.logits,
-                    "explorer_value": explorer_output.value,
-                    "explorer_hidden": explorer_output.hidden,
-                },
-                location=f"rollout_step_{step_index}",
+        if outputs_finite is not None:
+            # Accumulated on-device: a per-step .item() check would force a
+            # GPU sync on every environment step. The flag is inspected once
+            # after the rollout, before any optimizer step can consume it.
+            outputs_finite = outputs_finite & (
+                torch.isfinite(chaser_output.logits).all()
+                & torch.isfinite(chaser_output.value).all()
+                & torch.isfinite(chaser_output.hidden).all()
+                & torch.isfinite(explorer_output.logits).all()
+                & torch.isfinite(explorer_output.value).all()
+                & torch.isfinite(explorer_output.hidden).all()
             )
         chaser_action, chaser_log_prob = _sample_categorical(chaser_output.logits)
         explorer_action, explorer_log_prob = _sample_categorical(explorer_output.logits)
@@ -414,6 +450,13 @@ def _collect_rollout(
 
         chaser_hidden = chaser_output.hidden
         explorer_hidden = explorer_output.hidden
+
+    if outputs_finite is not None and not bool(outputs_finite.item()):
+        raise NonFiniteTrainingError(
+            location="rollout",
+            name="policy_outputs",
+            detail="non-finite logits/value/hidden during rollout collection",
+        )
 
     chaser_advantage, chaser_return = _gae(
         rewards=chaser_reward_tensor,
@@ -483,9 +526,9 @@ def _collect_rollout(
             value_loss=0.0,
             entropy=0.0,
             approx_kl=0.0,
-            grad_norm=0.0,
+            chaser_grad_norm=0.0,
+            explorer_grad_norm=0.0,
             max_param_abs=module_max_abs(chaser, explorer),
-            nonfinite_count=0.0,
         )
     return Rollout(chaser=chaser_agent, explorer=explorer_agent, metrics=metrics)
 
@@ -552,8 +595,13 @@ def _ppo_update(
     value_losses: list[float] = []
     entropies: list[float] = []
     approx_kls: list[float] = []
-    grad_norms: list[float] = []
-    parameters = [*chaser.parameters(), *explorer.parameters()]
+    chaser_grad_norms: list[float] = []
+    explorer_grad_norms: list[float] = []
+    # Gradients are clipped per agent: a joint norm would let one agent's
+    # gradient spike scale down the other's update, coupling two policies
+    # that are meant to be independent.
+    chaser_parameters = list(chaser.parameters())
+    explorer_parameters = list(explorer.parameters())
 
     for ppo_epoch in range(config.ppo_epochs):
         chaser_log_prob, chaser_value, chaser_entropy = _evaluate_actions(
@@ -615,27 +663,46 @@ def _ppo_update(
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        grad_norm = nn.utils.clip_grad_norm_(
-            parameters,
+        chaser_grad_norm = nn.utils.clip_grad_norm_(
+            chaser_parameters,
+            config.grad_clip,
+            error_if_nonfinite=config.finite_guard,
+        )
+        explorer_grad_norm = nn.utils.clip_grad_norm_(
+            explorer_parameters,
             config.grad_clip,
             error_if_nonfinite=config.finite_guard,
         )
         if config.finite_guard:
-            assert_finite_tensor(grad_norm, location=f"ppo_epoch_{ppo_epoch}", name="grad_norm")
+            assert_finite_tensor(
+                chaser_grad_norm,
+                location=f"ppo_epoch_{ppo_epoch}",
+                name="chaser_grad_norm",
+            )
+            assert_finite_tensor(
+                explorer_grad_norm,
+                location=f"ppo_epoch_{ppo_epoch}",
+                name="explorer_grad_norm",
+            )
         optimizer.step()
-        if config.finite_guard:
-            assert_finite_module(chaser, location=f"ppo_epoch_{ppo_epoch}", prefix="chaser")
-            assert_finite_module(explorer, location=f"ppo_epoch_{ppo_epoch}", prefix="explorer")
 
         if capture_metrics:
             policy_losses.append(policy_loss.item())
             value_losses.append(value_loss.item())
             entropies.append(entropy.item())
-            grad_norms.append(float(grad_norm.item()))
+            chaser_grad_norms.append(float(chaser_grad_norm.item()))
+            explorer_grad_norms.append(float(explorer_grad_norm.item()))
             with torch.no_grad():
                 chaser_kl = rollout.chaser.old_log_probs - chaser_log_prob
                 explorer_kl = rollout.explorer.old_log_probs - explorer_log_prob
                 approx_kls.append(0.5 * (chaser_kl.mean().item() + explorer_kl.mean().item()))
+
+    if config.finite_guard:
+        # Parameters are validated once per update rather than per epoch: the
+        # post-update loss/grad-norm guards above already fail fast, and the
+        # full state-dict sweep costs one CPU/GPU sync per tensor.
+        assert_finite_module(chaser, location="ppo_update", prefix="chaser")
+        assert_finite_module(explorer, location="ppo_update", prefix="explorer")
 
     if not capture_metrics:
         return None
@@ -654,9 +721,9 @@ def _ppo_update(
         value_loss=sum(value_losses) / len(value_losses),
         entropy=sum(entropies) / len(entropies),
         approx_kl=sum(approx_kls) / len(approx_kls),
-        grad_norm=sum(grad_norms) / len(grad_norms),
+        chaser_grad_norm=sum(chaser_grad_norms) / len(chaser_grad_norms),
+        explorer_grad_norm=sum(explorer_grad_norms) / len(explorer_grad_norms),
         max_param_abs=module_max_abs(chaser, explorer),
-        nonfinite_count=0.0,
     )
 
 
@@ -734,9 +801,9 @@ def _empty_metrics() -> RolloutMetrics:
         value_loss=0.0,
         entropy=0.0,
         approx_kl=0.0,
-        grad_norm=0.0,
+        chaser_grad_norm=0.0,
+        explorer_grad_norm=0.0,
         max_param_abs=0.0,
-        nonfinite_count=0.0,
     )
 
 
@@ -747,10 +814,25 @@ def _save_checkpoint(
     metrics: RolloutMetrics,
     *,
     path: Path | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    update: int | None = None,
+    device: torch.device | None = None,
 ) -> Path | None:
     checkpoint = path or config.checkpoint
     if not checkpoint:
         return None
+    training_state = None
+    if optimizer is not None and update is not None:
+        training_state = TrainingState(
+            update=update,
+            optimizer_state=optimizer.state_dict(),
+            cpu_rng_state=torch.get_rng_state(),
+            cuda_rng_state=(
+                torch.cuda.get_rng_state(device)
+                if device is not None and device.type == "cuda"
+                else None
+            ),
+        )
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
     save_checkpoint(
         checkpoint,
@@ -758,11 +840,51 @@ def _save_checkpoint(
         metrics=asdict(metrics),
         chaser_state=chaser.state_dict(),
         explorer_state=explorer.state_dict(),
+        training_state=training_state,
     )
     if config.finite_guard:
         require_healthy_checkpoint(checkpoint)
     print(f"saved_checkpoint={checkpoint}", flush=True)
     return checkpoint
+
+
+def _restore_training_state(
+    *,
+    config: TrainConfig,
+    chaser: RNNActorCritic,
+    explorer: RNNActorCritic,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+) -> int:
+    """Load model/optimizer/RNG state from a checkpoint; return its update index."""
+    path = Path(config.resume_from)  # type: ignore[arg-type]
+    if not path.exists():
+        raise FileNotFoundError(f"resume checkpoint not found: {path}")
+    saved_config, _, chaser_state, explorer_state = load_checkpoint(path)
+    current_config = _checkpoint_config(config)
+    for key in ("env", "batch_size", "hidden_size", "seed"):
+        if saved_config.get(key) != current_config.get(key):
+            raise ValueError(
+                f"resume checkpoint {path} was trained with {key}="
+                f"{saved_config.get(key)!r}, current config has "
+                f"{current_config.get(key)!r}"
+            )
+    training_state = load_training_state(path)
+    if training_state is None:
+        raise ValueError(f"checkpoint {path} has no training state; cannot resume")
+    if training_state.update >= config.updates:
+        raise ValueError(
+            f"checkpoint {path} is already at update {training_state.update}"
+            f" >= configured updates {config.updates}"
+        )
+    chaser.load_state_dict(chaser_state)
+    explorer.load_state_dict(explorer_state)
+    optimizer.load_state_dict(training_state.optimizer_state)
+    torch.set_rng_state(training_state.cpu_rng_state)
+    if device.type == "cuda" and training_state.cuda_rng_state is not None:
+        torch.cuda.set_rng_state(training_state.cuda_rng_state, device)
+    print(f"resumed_from={path} update={training_state.update}", flush=True)
+    return training_state.update
 
 
 def _assert_rollout_finite(rollout: Rollout) -> None:

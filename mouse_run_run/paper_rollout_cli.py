@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shlex
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from mouse_run_run.checkpoint_select import checkpoint_identity, select_checkpoints
 from mouse_run_run.health import checkpoint_health
 from mouse_run_run.rollout import collect_rollouts
-from mouse_run_run.serialization import CHECKPOINT_FORMAT, read_metadata
+from mouse_run_run.serialization import read_checkpoint_metadata
 from mouse_run_run.train import DEVICE_CHOICES
 
 
@@ -24,30 +26,59 @@ def main() -> None:
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--degenerate-threshold-fraction", type=float, default=0.01)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="RNG seed shared by every collection so rollouts are reproducible.",
+    )
+    parser.add_argument(
+        "--all-checkpoints",
+        action="store_true",
+        help="Collect for every checkpoint under the given directories,"
+        " including mid-training update_* files and failed attempts. Default"
+        " is the latest successful attempt per unit.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-collect rollouts that already have an ok record.",
+    )
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
 
-    checkpoints = _checkpoint_paths(args.paths)
+    checkpoints = select_checkpoints(args.paths, all_checkpoints=args.all_checkpoints)
     if args.limit is not None:
         checkpoints = checkpoints[: args.limit]
     if not checkpoints:
         raise SystemExit("no checkpoint safetensors found")
 
     records_path = args.records or args.output_root / "paper_rollout_records.jsonl"
+    already_collected = set() if args.force else _collected_checkpoints(records_path)
     failure_count = 0
     for checkpoint in checkpoints:
+        output = args.output_root / f"{_output_stem(checkpoint)}.safetensors"
+        if str(checkpoint) in already_collected and output.exists():
+            print(f"skipped_already_collected={checkpoint}", flush=True)
+            continue
         health = checkpoint_health(checkpoint)
-        output = args.output_root / f"{_safe_stem(checkpoint)}.safetensors"
+        config = None
+        try:
+            config, _ = read_checkpoint_metadata(checkpoint)
+        except Exception:
+            pass
+        identity = checkpoint_identity(config)
         if not health.ok:
             failure_count += 1
             _append_record(
                 records_path,
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "status": "invalid_checkpoint",
                     "created_at": datetime.now(UTC).isoformat(),
                     "command": shlex.join(sys.argv),
                     "checkpoint": str(checkpoint),
+                    **identity,
                     "output": str(output),
                     "checkpoint_health": _health_dict(health),
                     "error": "checkpoint failed finite/format validation",
@@ -67,6 +98,7 @@ def main() -> None:
                 degenerate_threshold_fraction=args.degenerate_threshold_fraction,
                 analysis_protocol="paper_neural_behavior_v1",
                 command=shlex.join(sys.argv),
+                seed=args.seed,
             )
         except Exception as exc:
             failure_count += 1
@@ -78,11 +110,12 @@ def main() -> None:
         _append_record(
             records_path,
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "status": status,
                 "created_at": datetime.now(UTC).isoformat(),
                 "command": shlex.join(sys.argv),
                 "checkpoint": str(checkpoint),
+                **identity,
                 "output": str(output),
                 "checkpoint_health": _health_dict(health),
                 "episodes": args.episodes,
@@ -90,6 +123,7 @@ def main() -> None:
                 "batch_size": args.batch_size,
                 "device": args.device,
                 "deterministic": args.deterministic,
+                "seed": args.seed,
                 "degenerate_threshold_fraction": args.degenerate_threshold_fraction,
                 "error": error,
             },
@@ -98,23 +132,22 @@ def main() -> None:
         raise SystemExit(1)
 
 
-def _checkpoint_paths(paths: list[Path]) -> list[Path]:
-    checkpoints: list[Path] = []
-    for path in paths:
-        path = path.expanduser()
-        if path.is_file():
-            checkpoints.append(path)
-            continue
-        if not path.is_dir():
-            raise FileNotFoundError(str(path))
-        for candidate in sorted(path.rglob("*.safetensors")):
-            try:
-                metadata = read_metadata(candidate)
-            except Exception:
+def _collected_checkpoints(records_path: Path) -> set[str]:
+    """Checkpoints that already have an ok rollout record."""
+    if not records_path.exists():
+        return set()
+    collected: set[str] = set()
+    with records_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
                 continue
-            if metadata.get("format") == CHECKPOINT_FORMAT:
-                checkpoints.append(candidate)
-    return sorted(dict.fromkeys(checkpoints))
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("status") == "ok":
+                collected.add(str(record.get("checkpoint")))
+    return collected
 
 
 def _append_record(path: Path, record: dict[str, object]) -> None:
@@ -123,9 +156,12 @@ def _append_record(path: Path, record: dict[str, object]) -> None:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
-def _safe_stem(path: Path) -> str:
+def _output_stem(path: Path) -> str:
+    """Readable stem plus a full-path hash so distinct checkpoints never collide."""
     parts = [part for part in path.with_suffix("").parts if part not in ("", "/")]
-    return "__".join(parts[-6:]).replace(" ", "_")
+    readable = "__".join(parts[-6:]).replace(" ", "_")
+    digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:10]
+    return f"{readable}__{digest}"
 
 
 def _health_dict(health: object) -> dict[str, object]:

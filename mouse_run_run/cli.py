@@ -49,6 +49,11 @@ def main() -> None:
         type=Path,
         default=Path("runs/marl_ppo.safetensors"),
     )
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        help="Checkpoint with training state to resume from.",
+    )
     args = parser.parse_args()
     _apply_preset(args)
 
@@ -92,6 +97,7 @@ def main() -> None:
         subspace_metric_period=args.subspace_metric_period,
         triton_env_step=args.triton_env_step,
         finite_guard=args.finite_guard,
+        resume_from=args.resume_from,
         env=env,
     )
     train(config)

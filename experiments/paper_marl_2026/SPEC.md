@@ -36,7 +36,7 @@ Both conditions use the same PPO code path, model architecture, seeds, episode l
 ## Primary Metrics
 
 - Valid trained pairs per condition.
-- Random-opponent evaluation over `100 episodes x 100 timesteps`.
+- Random-opponent evaluation over `100 episodes x 100 timesteps`, per condition (`social` vs `non_social`), against the latest successful attempt's checkpoint per unit, with a shared evaluation seed so every checkpoint faces the same standardized random opponent.
 - Collisions per episode.
 - Chaser return and explorer return.
 - Partner-in-vision fraction.
@@ -63,9 +63,11 @@ Both conditions use the same PPO code path, model architecture, seeds, episode l
 
 - A training attempt fails if any loss, logits-derived tensor, gradient norm, model parameter, metric, or checkpoint tensor becomes NaN or Inf.
 - A completed attempt is invalid unless `status.json` says `completed` and `checkpoints/latest.safetensors` passes finite checkpoint validation.
-- Invalid attempts are preserved and may be retried up to the configured `max_attempts`.
+- Genuinely failed attempts (NaN/Inf, crash, invalid checkpoint, timeout) are preserved and retried up to the configured `max_attempts`.
+- A worker is killed and its attempt marked `timeout` after `attempt_timeout_hours` wall-clock hours (primary: 24).
+- Interrupted attempts (runner shutdown, host reboot) do not count toward `max_attempts`. The next invocation starts a new attempt that resumes from the newest healthy checkpoint with training state; `max_total_attempts` (default 10) bounds total attempt directories per unit.
 - NaN checkpoints are training failures, not paper-style exclusions.
-- Paper-style degenerate episode exclusion applies only to analysis rollouts: episodes are excluded when same-state/stationary repeated behavior exceeds `1%` of episode length.
+- Paper-style degenerate episode exclusion applies only to analysis rollouts. Interpretation of the paper rule: an episode is degenerate when the longest consecutive run of stuck steps (agent issued a valid action but stayed in the same tile for a non-social reason — wall bump or explicit stationarity; collision-blocked steps are excluded because collision is the rewarded social outcome) exceeds `1%` of episode length, per agent or jointly.
 
 ## Trial Plan / Seeds / Budget
 
@@ -79,14 +81,18 @@ Both conditions use the same PPO code path, model architecture, seeds, episode l
 Smoke:
 
 ```bash
-uv run python scripts/run/launch_gate.py --config experiments/paper_marl_2026/configs/smoke.json
+uv run python scripts/run/launch_gate.py --config experiments/paper_marl_2026/configs/smoke.json --allow-smoke
 uv run python scripts/run_local_experiment.py --config experiments/paper_marl_2026/configs/smoke.json
 ```
 
-Primary:
+Primary (the gate requires a Triton equivalence record produced from the
+current commit with a clean working tree):
 
 ```bash
-uv run python scripts/run/launch_gate.py --config experiments/paper_marl_2026/configs/primary.json
+uv run python scripts/verify_triton_env.py --output runs/mouse-run-run-0701/triton_equivalence.json
+uv run python scripts/run/launch_gate.py \
+  --config experiments/paper_marl_2026/configs/primary.json \
+  --triton-equivalence runs/mouse-run-run-0701/triton_equivalence.json
 uv run python scripts/run_local_experiment.py --config experiments/paper_marl_2026/configs/primary.json
 ```
 
@@ -133,3 +139,4 @@ This is a modern implementation, not the original RLlib code. The primary preset
 ## Spec Revision Log
 
 - 2026-07-02: Initial formal spec. Fixed primary preset to `paper_text`, retained Triton env-only acceleration, and defined NaN checkpoints as failed attempts rather than exclusions.
+- 2026-07-02 (rev 2, pre-launch review): degenerate rule reinterpreted as longest consecutive stuck run excluding collision-blocked steps; interrupted attempts no longer consume `max_attempts` and resume from checkpoint (optimizer/RNG state now serialized); per-agent gradient clipping (was joint); approach/escape events gated on new-field per official event precedence; paper evaluation/rollout selection fixed to the latest successful attempt per unit with a shared seed; evaluation summary grouped by task; 24h attempt timeout; launch gate binds the Triton equivalence record to the current git sha.

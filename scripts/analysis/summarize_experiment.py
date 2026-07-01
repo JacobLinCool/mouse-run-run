@@ -73,12 +73,43 @@ def _valid_pairs_by_task(runs: list[dict[str, Any]]) -> dict[str, int]:
     return {task: len(units) for task, units in sorted(valid_units.items())}
 
 
+TRAINING_METRIC_KEYS = (
+    "collisions_per_episode",
+    "chaser_return",
+    "explorer_return",
+    "chaser_partner_vision",
+    "explorer_partner_vision",
+    "chaser_new_fields",
+    "explorer_new_fields",
+    "final_distance",
+    "policy_loss",
+    "value_loss",
+    "entropy",
+    "approx_kl",
+    "chaser_grad_norm",
+    "explorer_grad_norm",
+    "max_param_abs",
+)
+
+EVALUATION_METRIC_KEYS = (
+    "collisions_per_episode",
+    "chaser_return",
+    "explorer_return",
+    "chaser_partner_vision",
+    "explorer_partner_vision",
+    "chaser_new_fields",
+    "explorer_new_fields",
+    "final_distance",
+    "average_distance",
+    "degenerate_fraction",
+)
+
+
 def _training_metrics(runs: list[dict[str, Any]]) -> dict[str, Any]:
-    metrics = [
-        row
-        for row in runs
-        if row.get("status") == "completed" and row.get("healthy") and row.get("checkpoint_ok")
-    ]
+    # One row per unit: the latest successful attempt, materialized by
+    # build_tables. Averaging over every completed attempt would double-count
+    # units that completed more than once.
+    metrics = [row for row in runs if row.get("is_latest_successful")]
     output: dict[str, Any] = {}
     for task in sorted({str(row.get("task")) for row in metrics}):
         task_rows = [row for row in metrics if row.get("task") == task]
@@ -90,53 +121,35 @@ def _training_metrics(runs: list[dict[str, Any]]) -> dict[str, Any]:
                     if row.get("metrics", {}).get(key) is not None
                 ]
             )
-            for key in (
-                "collisions_per_episode",
-                "chaser_return",
-                "explorer_return",
-                "chaser_partner_vision",
-                "explorer_partner_vision",
-                "chaser_new_fields",
-                "explorer_new_fields",
-                "final_distance",
-                "policy_loss",
-                "value_loss",
-                "entropy",
-                "approx_kl",
-                "grad_norm",
-                "max_param_abs",
-            )
+            for key in TRAINING_METRIC_KEYS
         }
+        output[task]["n"] = len(task_rows)
     return output
 
 
 def _evaluation_metrics(evaluations: list[dict[str, Any]]) -> dict[str, Any]:
+    # The research question is social vs non_social, so evaluations are
+    # grouped by task first and opponent mode second; pooling tasks would
+    # answer nothing.
     output: dict[str, Any] = {}
     ok_rows = [row for row in evaluations if row.get("status") == "ok"]
-    for mode in sorted({str(row.get("opponent_mode")) for row in ok_rows}):
-        rows = [row for row in ok_rows if row.get("opponent_mode") == mode]
-        output[mode] = {
-            key: _mean_std(
-                [
-                    float(row.get("metrics", {}).get(key))
-                    for row in rows
-                    if row.get("metrics", {}).get(key) is not None
-                ]
-            )
-            for key in (
-                "collisions_per_episode",
-                "chaser_return",
-                "explorer_return",
-                "chaser_partner_vision",
-                "explorer_partner_vision",
-                "chaser_new_fields",
-                "explorer_new_fields",
-                "final_distance",
-                "average_distance",
-                "degenerate_fraction",
-            )
-        }
-        output[mode]["n"] = len(rows)
+    for task in sorted({str(row.get("task")) for row in ok_rows}):
+        task_rows = [row for row in ok_rows if str(row.get("task")) == task]
+        task_output: dict[str, Any] = {}
+        for mode in sorted({str(row.get("opponent_mode")) for row in task_rows}):
+            rows = [row for row in task_rows if row.get("opponent_mode") == mode]
+            task_output[mode] = {
+                key: _mean_std(
+                    [
+                        float(row.get("metrics", {}).get(key))
+                        for row in rows
+                        if row.get("metrics", {}).get(key) is not None
+                    ]
+                )
+                for key in EVALUATION_METRIC_KEYS
+            }
+            task_output[mode]["n"] = len(rows)
+        output[task] = task_output
     output["failed_count"] = len([row for row in evaluations if row.get("status") != "ok"])
     return output
 

@@ -29,9 +29,9 @@ class EvaluationMetrics:
     average_distance: float
     degenerate_episodes: int
     degenerate_fraction: float
-    same_state_steps: float
-    chaser_stationary_steps: float
-    explorer_stationary_steps: float
+    same_state_run_steps: float
+    chaser_stuck_run_steps: float
+    explorer_stuck_run_steps: float
 
 
 @torch.no_grad()
@@ -45,7 +45,12 @@ def evaluate_checkpoint(
     opponent_mode: OpponentMode = "self_play",
     max_steps: int | None = None,
     degenerate_threshold_fraction: float = 0.01,
+    seed: int | None = None,
 ) -> EvaluationMetrics:
+    if opponent_mode not in ("self_play", "random_chaser", "random_explorer"):
+        raise ValueError(f"Unsupported opponent mode: {opponent_mode}")
+    if seed is not None:
+        torch.manual_seed(seed)
     device = select_device(device_name)
     config, _, chaser_state, explorer_state = load_checkpoint(checkpoint)
     env_config = GridWorldConfig(**config["env"])
@@ -76,9 +81,9 @@ def evaluate_checkpoint(
         "final_distance": 0.0,
         "average_distance": 0.0,
         "degenerate_episodes": 0.0,
-        "same_state_steps": 0.0,
-        "chaser_stationary_steps": 0.0,
-        "explorer_stationary_steps": 0.0,
+        "same_state_run_steps": 0.0,
+        "chaser_stuck_run_steps": 0.0,
+        "explorer_stuck_run_steps": 0.0,
     }
     completed = 0
     while completed < episodes:
@@ -113,9 +118,9 @@ def evaluate_checkpoint(
         average_distance=totals["average_distance"] / episodes,
         degenerate_episodes=int(totals["degenerate_episodes"]),
         degenerate_fraction=totals["degenerate_episodes"] / episodes,
-        same_state_steps=totals["same_state_steps"] / episodes,
-        chaser_stationary_steps=totals["chaser_stationary_steps"] / episodes,
-        explorer_stationary_steps=totals["explorer_stationary_steps"] / episodes,
+        same_state_run_steps=totals["same_state_run_steps"] / episodes,
+        chaser_stuck_run_steps=totals["chaser_stuck_run_steps"] / episodes,
+        explorer_stuck_run_steps=totals["explorer_stuck_run_steps"] / episodes,
     )
 
 
@@ -149,25 +154,33 @@ def _evaluate_batch(
     explorer_positions = [env.explorer_position.clone()]
     chaser_actions = []
     explorer_actions = []
+    chaser_collisions = []
+    explorer_collisions = []
 
     for _ in range(env_config.max_steps):
-        chaser_output = chaser(chaser_observation, chaser_hidden)
-        explorer_output = explorer(explorer_observation, explorer_hidden)
-
-        chaser_action = _select_action(chaser_output.logits, deterministic)
-        explorer_action = _select_action(explorer_output.logits, deterministic)
+        # The randomized agent's policy network is never queried: its forward
+        # pass would be discarded, and sampling from it would perturb the RNG
+        # stream shared with the random opponent.
         if opponent_mode == "random_chaser":
             chaser_action = torch.randint(4, (batch_size,), device=device)
-        elif opponent_mode == "random_explorer":
+        else:
+            chaser_output = chaser(chaser_observation, chaser_hidden)
+            chaser_action = _select_action(chaser_output.logits, deterministic)
+            chaser_hidden = chaser_output.hidden
+        if opponent_mode == "random_explorer":
             explorer_action = torch.randint(4, (batch_size,), device=device)
-        elif opponent_mode != "self_play":
-            raise ValueError(f"Unsupported opponent mode: {opponent_mode}")
+        else:
+            explorer_output = explorer(explorer_observation, explorer_hidden)
+            explorer_action = _select_action(explorer_output.logits, deterministic)
+            explorer_hidden = explorer_output.hidden
 
         result = env.step(chaser_action, explorer_action)
         chaser_actions.append(chaser_action)
         explorer_actions.append(explorer_action)
         chaser_positions.append(result.chaser_position)
         explorer_positions.append(result.explorer_position)
+        chaser_collisions.append(result.chaser_collision)
+        explorer_collisions.append(result.explorer_collision)
         chaser_return += result.chaser_reward
         explorer_return += result.explorer_reward
         collisions += result.collision.float()
@@ -178,8 +191,6 @@ def _evaluate_batch(
         final_distance = result.distance
         distance_sum += result.distance
 
-        chaser_hidden = chaser_output.hidden
-        explorer_hidden = explorer_output.hidden
         chaser_observation = result.chaser_observation
         explorer_observation = result.explorer_observation
 
@@ -189,6 +200,8 @@ def _evaluate_batch(
         torch.stack(explorer_positions),
         torch.stack(chaser_actions),
         torch.stack(explorer_actions),
+        chaser_collisions=torch.stack(chaser_collisions),
+        explorer_collisions=torch.stack(explorer_collisions),
         threshold_fraction=degenerate_threshold_fraction,
     )
     return EvaluationMetrics(
@@ -204,9 +217,9 @@ def _evaluate_batch(
         average_distance=(distance_sum / horizon).mean().item(),
         degenerate_episodes=int(degeneracy["degenerate"].sum().item()),
         degenerate_fraction=degeneracy["degenerate"].float().mean().item(),
-        same_state_steps=degeneracy["same_state_steps"].float().mean().item(),
-        chaser_stationary_steps=degeneracy["chaser_stationary_steps"].float().mean().item(),
-        explorer_stationary_steps=degeneracy["explorer_stationary_steps"].float().mean().item(),
+        same_state_run_steps=degeneracy["same_state_run_steps"].float().mean().item(),
+        chaser_stuck_run_steps=degeneracy["chaser_stuck_run_steps"].float().mean().item(),
+        explorer_stuck_run_steps=degeneracy["explorer_stuck_run_steps"].float().mean().item(),
     )
 
 

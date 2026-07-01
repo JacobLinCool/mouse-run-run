@@ -21,6 +21,7 @@ from mouse_run_run.provenance import (
     json_hash,
     write_json_atomic,
 )
+from mouse_run_run.serialization import read_metadata
 from mouse_run_run.train import TrainConfig, train
 
 
@@ -61,15 +62,35 @@ def main() -> None:
     parser.add_argument("--checkpoint-every-seconds", type=float, default=1800.0)
     parser.add_argument("--status-every-seconds", type=float, default=1800.0)
     parser.add_argument("--cost-per-hour", type=float)
-    parser.add_argument("--device", choices=("cuda",), default="cuda")
+    parser.add_argument("--device", choices=("auto", "cpu", "mps", "cuda"), default="cuda")
     parser.add_argument("--cuda-tf32", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--subspace-metric-period", type=int, default=1)
     parser.add_argument("--triton-env-step", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--finite-guard", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-attempts", type=int, default=2)
+    parser.add_argument(
+        "--max-total-attempts",
+        type=int,
+        default=10,
+        help=(
+            "Upper bound on attempt directories per unit, counting interrupted"
+            " attempts. Guards against unbounded crash/interrupt loops."
+        ),
+    )
+    parser.add_argument(
+        "--attempt-timeout-hours",
+        type=float,
+        default=0.0,
+        help="Kill a worker after this many wall-clock hours (0 disables).",
+    )
     parser.add_argument("--experiment-spec", type=Path, default=Path("experiments/paper_marl_2026/SPEC.md"))
     parser.add_argument("--runs-root", type=Path, default=Path("runs"))
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--force-fresh",
+        action="store_true",
+        help="Allow --no-resume to run inside a non-empty experiment directory.",
+    )
     parser.add_argument("--worker", action="store_true")
     if config_args.config:
         parser.set_defaults(**_load_config(config_args.config))
@@ -82,6 +103,7 @@ def main() -> None:
 
     _apply_preset(args)
     _validate_args(args)
+    _require_fresh_or_resume(args)
     runner = ExperimentRunner(args)
     runner.run()
 
@@ -125,6 +147,9 @@ def _worker() -> None:
             experiment_id=payload["experiment"],
             run_id=payload["run_id"],
             attempt_id=payload["attempt_id"],
+            resume_from=(
+                Path(payload["resume_from"]) if payload.get("resume_from") else None
+            ),
             env=env,
         )
     )
@@ -162,6 +187,8 @@ class ExperimentRunner:
         self.completed_unit_ids: set[str] = set()
         self.failed_units: list[dict[str, Any]] = []
         self.failed_attempts: list[dict[str, Any]] = []
+        self.interrupted_attempts: list[dict[str, Any]] = []
+        self.unit_failure_counts: dict[str, int] = {}
         self.running: dict[subprocess.Popen[str], dict[str, Any]] = {}
         self.log_handles: dict[subprocess.Popen[str], Any] = {}
         self.interrupted = False
@@ -229,19 +256,74 @@ class ExperimentRunner:
                 self.completed_unit_ids.add(completed["unit_id"])
                 continue
 
+            # Only genuinely failed attempts (NaN/Inf, crash, invalid
+            # checkpoint) count toward max_attempts. Interrupted attempts
+            # (runner shutdown, host reboot) are retried with a resume
+            # checkpoint and only bounded by max_total_attempts.
+            failure_count = self._failed_attempt_count(unit)
+            self.unit_failure_counts[unit["unit_id"]] = failure_count
             next_attempt = self._next_attempt(unit)
-            if next_attempt > self.args.max_attempts:
-                failure = {
-                    **unit,
-                    "attempt": next_attempt - 1,
-                    "failed_at": datetime.now(UTC).isoformat(),
-                    "reason": "max_attempts_exhausted",
-                }
-                self.failed_units.append(failure)
+            if failure_count >= self.args.max_attempts:
+                self._record_exhausted_unit(unit, next_attempt - 1, "max_attempts_exhausted")
+                continue
+            if next_attempt > self.args.max_total_attempts:
+                self._record_exhausted_unit(
+                    unit, next_attempt - 1, "max_total_attempts_exhausted"
+                )
                 continue
             job = self._make_job(unit, attempt=next_attempt)
+            job["resume_from"] = self._find_resume_checkpoint(unit)
             self.jobs.append(job)
             self.pending.append(job)
+
+    def _record_exhausted_unit(self, unit: dict[str, Any], attempt: int, reason: str) -> None:
+        failure = {
+            **unit,
+            "attempt": attempt,
+            "failed_at": datetime.now(UTC).isoformat(),
+            "reason": reason,
+        }
+        self.failed_units.append(failure)
+
+    def _failed_attempt_count(self, unit: dict[str, Any]) -> int:
+        count = 0
+        for attempt_dir in self._attempt_dirs(unit):
+            status = self._read_status_dir(attempt_dir)
+            state = status.get("state")
+            if state == "failed":
+                count += 1
+            elif state == "completed":
+                checkpoint = attempt_dir / "checkpoints" / "latest.safetensors"
+                if not checkpoint_health(checkpoint).ok:
+                    count += 1
+        return count
+
+    def _find_resume_checkpoint(self, unit: dict[str, Any]) -> str | None:
+        """Best resumable checkpoint from the most recent non-failed attempt.
+
+        Failed attempts (NaN/Inf and friends) are skipped so a genuine
+        failure retries from scratch; interrupted or timed-out attempts
+        donate their newest healthy checkpoint with training state.
+        """
+        for attempt_dir in reversed(self._attempt_dirs(unit)):
+            if self._read_status_dir(attempt_dir).get("state") == "failed":
+                continue
+            checkpoint_dir = attempt_dir / "checkpoints"
+            if not checkpoint_dir.is_dir():
+                continue
+            best: Path | None = None
+            best_update = -1
+            for path in checkpoint_dir.glob("*.safetensors"):
+                update = _training_state_update(path)
+                if update is None or update <= best_update:
+                    continue
+                if not checkpoint_health(path).ok:
+                    continue
+                best = path
+                best_update = update
+            if best is not None:
+                return str(best)
+        return None
 
     def _resume_completed_attempt(self, unit: dict[str, Any]) -> dict[str, Any] | None:
         if not self.args.resume:
@@ -265,6 +347,10 @@ class ExperimentRunner:
         return sorted(path for path in seed_dir.glob("attempt_*") if path.is_dir())
 
     def _make_job(self, unit: dict[str, Any], *, attempt: int) -> dict[str, Any]:
+        # Copy only the unit identity: `unit` may be a failed job dict, and
+        # spreading it whole would leak stale pid/returncode/health fields
+        # into the retry record.
+        unit = {"task": unit["task"], "seed": unit["seed"], "unit_id": unit["unit_id"]}
         attempt_id = f"attempt_{attempt:02d}"
         run_dir = self.root / unit["task"] / f"seed_{unit['seed']:04d}" / attempt_id
         run_id = f"{self.args.experiment}.{unit['task']}.seed_{unit['seed']:04d}.{attempt_id}"
@@ -324,6 +410,7 @@ class ExperimentRunner:
         )
         job["pid"] = process.pid
         job["started_at"] = datetime.now(UTC).isoformat()
+        job["started_monotonic"] = time.monotonic()
         self.running[process] = job
         self.log_handles[process] = log_handle
         self._append_raw_record("attempt_started", job)
@@ -334,9 +421,26 @@ class ExperimentRunner:
         )
 
     def _poll_running(self) -> None:
+        now = time.monotonic()
+        timeout_seconds = self.args.attempt_timeout_hours * 3600.0
         for process, job in list(self.running.items()):
             returncode = process.poll()
             if returncode is None:
+                if (
+                    timeout_seconds > 0.0
+                    and not job.get("timed_out")
+                    and now - job["started_monotonic"] > timeout_seconds
+                ):
+                    job["timed_out"] = True
+                    job["kill_deadline"] = now + 30.0
+                    print(
+                        f"timeout task={job['task']} seed={job['seed']} "
+                        f"attempt={job['attempt']} pid={job.get('pid')}",
+                        flush=True,
+                    )
+                    process.terminate()
+                elif job.get("timed_out") and now > job.get("kill_deadline", now):
+                    process.kill()
                 continue
             log_handle = self.log_handles.pop(process)
             log_handle.write(
@@ -351,6 +455,26 @@ class ExperimentRunner:
                 self._append_raw_record("attempt_completed", job)
                 print(
                     f"completed task={job['task']} seed={job['seed']} "
+                    f"attempt={job['attempt']}",
+                    flush=True,
+                )
+                continue
+            if job.get("timed_out"):
+                self._handle_failed_attempt(job, returncode=returncode, reason="timeout")
+                continue
+            if self.interrupted and returncode != 0:
+                # Shutdown-induced exit: raw evidence is recorded, but the
+                # attempt does not count toward max_attempts and the next
+                # invocation resumes from its newest checkpoint.
+                interruption = {
+                    **job,
+                    "returncode": returncode,
+                    "interrupted_at": datetime.now(UTC).isoformat(),
+                }
+                self.interrupted_attempts.append(interruption)
+                self._append_raw_record("attempt_interrupted", interruption)
+                print(
+                    f"interrupted task={job['task']} seed={job['seed']} "
                     f"attempt={job['attempt']}",
                     flush=True,
                 )
@@ -381,12 +505,16 @@ class ExperimentRunner:
         }
         self.failed_attempts.append(failure)
         self._append_raw_record("attempt_failed", failure)
+        unit_id = job["unit_id"]
+        self.unit_failure_counts[unit_id] = self.unit_failure_counts.get(unit_id, 0) + 1
         if (
             not self.interrupted
-            and job["attempt"] < self.args.max_attempts
-            and job["unit_id"] not in self.completed_unit_ids
+            and self.unit_failure_counts[unit_id] < self.args.max_attempts
+            and job["attempt"] < self.args.max_total_attempts
+            and unit_id not in self.completed_unit_ids
         ):
             retry = self._make_job(job, attempt=job["attempt"] + 1)
+            retry["resume_from"] = self._find_resume_checkpoint(retry)
             self.jobs.append(retry)
             self.pending.append(retry)
             print(
@@ -433,7 +561,25 @@ class ExperimentRunner:
             "units": self.units,
             "initial_attempts": self.jobs,
         }
-        write_json_atomic(self.root / "manifest.json", manifest)
+        # Every invocation is recorded append-only; manifest.json itself is
+        # raw evidence of the first launch and is never overwritten.
+        self._append_raw_record("runner_invocation", manifest)
+        manifest_path = self.root / "manifest.json"
+        if manifest_path.exists():
+            try:
+                existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                existing = {}
+            if existing.get("config_sha256") != manifest["config_sha256"]:
+                print(
+                    "warning: config differs from original manifest.json"
+                    f" (original {existing.get('config_sha256')},"
+                    f" current {manifest['config_sha256']});"
+                    " keeping the original manifest, see raw_records.jsonl",
+                    flush=True,
+                )
+            return
+        write_json_atomic(manifest_path, manifest)
 
     def _write_status(self, state: str) -> None:
         job_statuses = [self._job_status(job) for job in self.jobs]
@@ -467,6 +613,8 @@ class ExperimentRunner:
             "completed_jobs": len(self.completed_unit_ids),
             "failed_jobs": len(self.failed_units),
             "failed_attempts_count": len(self.failed_attempts),
+            "interrupted_attempts_count": len(self.interrupted_attempts),
+            "interrupted_attempts": self.interrupted_attempts,
             "pending_jobs": len(self.pending),
             "total_jobs": len(self.units),
             "known_attempts": len(self.jobs),
@@ -504,7 +652,10 @@ class ExperimentRunner:
         return payload
 
     def _read_job_status(self, job: dict[str, Any]) -> dict[str, Any]:
-        status_path = Path(job["run_dir"]) / "status.json"
+        return self._read_status_dir(Path(job["run_dir"]))
+
+    def _read_status_dir(self, run_dir: Path) -> dict[str, Any]:
+        status_path = run_dir / "status.json"
         if not status_path.exists():
             return {}
         try:
@@ -593,8 +744,39 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("grad-clip must be positive")
     if args.max_attempts < 1:
         raise ValueError("max-attempts must be at least 1")
+    if args.max_total_attempts < args.max_attempts:
+        raise ValueError("max-total-attempts must be at least max-attempts")
+    if args.attempt_timeout_hours < 0:
+        raise ValueError("attempt-timeout-hours must be non-negative")
     if args.experiment_spec and not args.experiment_spec.exists():
         raise FileNotFoundError(str(args.experiment_spec))
+
+
+def _require_fresh_or_resume(args: argparse.Namespace) -> None:
+    if args.resume:
+        return
+    root = args.runs_root / args.experiment
+    if not root.exists() or not _has_experiment_evidence(root):
+        return
+    if not args.force_fresh:
+        raise SystemExit(
+            f"refusing to run with --no-resume: experiment directory {root} is"
+            " not empty and re-running would shadow prior evidence."
+            " Use --resume to continue, --force-fresh to archive the existing"
+            " directory, or a new --experiment name."
+        )
+    # Archive instead of deleting or overwriting: prior evidence stays intact.
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    archived = root.with_name(f"{root.name}.superseded-{stamp}")
+    root.rename(archived)
+    print(f"archived_previous_experiment={archived}", flush=True)
+
+
+def _has_experiment_evidence(root: Path) -> bool:
+    """True when the directory holds run evidence (not just a gate record)."""
+    if any((root / name).exists() for name in ("manifest.json", "raw_records.jsonl", "run_status.json")):
+        return True
+    return any(root.glob("*/seed_*"))
 
 
 def _load_config(path: Path) -> dict[str, Any]:
@@ -655,6 +837,18 @@ def _attempt_number(path: Path) -> int:
         return int(path.name.removeprefix("attempt_"))
     except ValueError as exc:
         raise ValueError(f"invalid attempt directory: {path}") from exc
+
+
+def _training_state_update(path: Path) -> int | None:
+    """Update index of the training state in a checkpoint, if present."""
+    try:
+        metadata = read_metadata(path)
+        raw_state = metadata.get("training_state")
+        if raw_state is None:
+            return None
+        return int(json.loads(raw_state)["update"])
+    except Exception:
+        return None
 
 
 def asdict_safe_health(health: object) -> dict[str, Any]:

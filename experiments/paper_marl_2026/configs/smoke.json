@@ -8,6 +8,7 @@
   "experiment": "paper-marl-smoke",
   "experiment_spec": "experiments/paper_marl_2026/SPEC.md",
   "finite_guard": true,
+  "force_fresh": true,
   "log_every": 1,
   "max_attempts": 1,
   "max_steps": 8,
