@@ -1,0 +1,867 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mouse Run Run Viewer</title>
+    <style>
+      :root {
+        --paper: #f7f7f2;
+        --panel: #ffffff;
+        --ink: #202426;
+        --muted: #697177;
+        --line: #d9ddd8;
+        --grid: #e5e7df;
+        --chaser: #d84f45;
+        --explorer: #2189a8;
+        --green: #4f8a5b;
+        --amber: #c4862b;
+        --danger: #b42318;
+        --shadow: 0 12px 28px rgba(28, 32, 34, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background: var(--paper);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        letter-spacing: 0;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      button,
+      select,
+      input[type="number"],
+      input[type="text"] {
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+        color: var(--ink);
+      }
+
+      button {
+        display: inline-grid;
+        min-width: 36px;
+        place-items: center;
+        padding: 0 10px;
+        cursor: pointer;
+      }
+
+      button.primary {
+        border-color: #1f6f8a;
+        background: #2189a8;
+        color: #fff;
+      }
+
+      button:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
+
+      label {
+        display: grid;
+        gap: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      input[type="text"] {
+        min-width: 320px;
+        padding: 0 9px;
+      }
+
+      input[type="number"] {
+        width: 86px;
+        padding: 0 9px;
+      }
+
+      select {
+        padding: 0 9px;
+      }
+
+      input[type="range"] {
+        width: 100%;
+        accent-color: #2189a8;
+      }
+
+      .app {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 100vh;
+      }
+
+      .topbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: end;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(10px);
+      }
+
+      .brand {
+        min-width: 174px;
+        margin-right: 4px;
+      }
+
+      .brand strong {
+        display: block;
+        font-size: 16px;
+      }
+
+      .brand span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .main {
+        display: grid;
+        grid-template-columns: minmax(420px, 1fr) 360px;
+        gap: 16px;
+        padding: 16px;
+      }
+
+      .stage {
+        display: grid;
+        grid-template-rows: minmax(360px, 1fr) auto;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .canvas-wrap {
+        position: relative;
+        display: grid;
+        place-items: center;
+        min-height: 360px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      canvas {
+        width: min(86vh, 100%);
+        max-width: 760px;
+        aspect-ratio: 1;
+      }
+
+      .status {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        pointer-events: none;
+      }
+
+      .badge {
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .badge.chaser {
+        border-color: rgba(216, 79, 69, 0.35);
+        color: var(--chaser);
+      }
+
+      .badge.explorer {
+        border-color: rgba(33, 137, 168, 0.35);
+        color: var(--explorer);
+      }
+
+      .badge.collision {
+        border-color: rgba(180, 35, 24, 0.45);
+        color: var(--danger);
+      }
+
+      .badge.degenerate {
+        border-color: rgba(196, 134, 43, 0.55);
+        color: var(--amber);
+      }
+
+      .transport {
+        display: grid;
+        grid-template-columns: auto auto auto minmax(160px, 1fr) 160px;
+        gap: 10px;
+        align-items: center;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .side {
+        display: grid;
+        align-content: start;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: var(--shadow);
+      }
+
+      .panel h2 {
+        margin: 0;
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--line);
+        font-size: 14px;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        background: var(--line);
+      }
+
+      .metric {
+        min-height: 58px;
+        padding: 9px 10px;
+        background: #fff;
+      }
+
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 18px;
+        line-height: 1.1;
+        overflow-wrap: anywhere;
+      }
+
+      .prob-row {
+        display: grid;
+        grid-template-columns: 24px 1fr 42px;
+        gap: 7px;
+        align-items: center;
+        padding: 4px 10px;
+        font-size: 12px;
+      }
+
+      .bar {
+        height: 7px;
+        border-radius: 999px;
+        background: #ecefe9;
+        overflow: hidden;
+      }
+
+      .bar > i {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: var(--explorer);
+      }
+
+      .prob-row.chaser .bar > i {
+        background: var(--chaser);
+      }
+
+      .events {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        padding: 10px;
+      }
+
+      .event {
+        padding: 5px 7px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .event.on {
+        border-color: rgba(79, 138, 91, 0.35);
+        color: var(--green);
+        background: rgba(79, 138, 91, 0.08);
+      }
+
+      .event.alert.on {
+        border-color: rgba(180, 35, 24, 0.35);
+        color: var(--danger);
+        background: rgba(180, 35, 24, 0.08);
+      }
+
+      .message {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        max-width: 520px;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: var(--shadow);
+        color: var(--ink);
+        font-size: 13px;
+      }
+
+      .message.error {
+        border-color: rgba(180, 35, 24, 0.35);
+        color: var(--danger);
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      @media (max-width: 980px) {
+        .main {
+          grid-template-columns: 1fr;
+        }
+
+        .transport {
+          grid-template-columns: auto auto auto 1fr;
+        }
+
+        .transport label {
+          grid-column: span 4;
+        }
+
+        input[type="text"] {
+          min-width: min(320px, 80vw);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <strong>Mouse Run Run</strong>
+          <span id="checkpointCount">checkpoints</span>
+        </div>
+        <label>
+          Checkpoint
+          <input id="checkpointPath" type="text" list="checkpointOptions" />
+          <datalist id="checkpointOptions"></datalist>
+        </label>
+        <label>
+          Episode Seed
+          <input id="seedInput" type="number" value="0" min="0" step="1" />
+        </label>
+        <label>
+          Opponent
+          <select id="opponentSelect">
+            <option value="self_play">self play</option>
+            <option value="random_chaser">random chaser</option>
+            <option value="random_explorer">random explorer</option>
+          </select>
+        </label>
+        <label>
+          Device
+          <select id="deviceSelect">
+            <option value="auto">auto</option>
+            <option value="cpu">cpu</option>
+            <option value="mps">mps</option>
+            <option value="cuda">cuda</option>
+          </select>
+        </label>
+        <label>
+          Policy
+          <select id="deterministicSelect">
+            <option value="true">deterministic</option>
+            <option value="false">stochastic</option>
+          </select>
+        </label>
+        <label>
+          Analysis
+          <select id="filterSelect">
+            <option value="false">raw</option>
+            <option value="true">non-degenerate</option>
+          </select>
+        </label>
+        <button class="primary" id="loadButton">Load</button>
+        <button id="refreshButton" title="Refresh checkpoints">Refresh</button>
+      </header>
+
+      <main class="main">
+        <section class="stage">
+          <div class="canvas-wrap">
+            <canvas id="world" width="900" height="900"></canvas>
+            <div class="status" id="badges"></div>
+          </div>
+          <div class="transport">
+            <button id="prevButton" title="Previous step">-1</button>
+            <button id="playButton" title="Play or pause">Play</button>
+            <button id="nextButton" title="Next step">+1</button>
+            <label>
+              Timeline
+              <input id="timeline" type="range" min="0" max="0" value="0" />
+            </label>
+            <label>
+              Speed <span id="speedText">1.0x</span>
+              <input id="speed" type="range" min="0.25" max="8" step="0.25" value="1" />
+            </label>
+          </div>
+        </section>
+
+        <aside class="side">
+          <section class="panel">
+            <h2>Frame</h2>
+            <div class="metrics">
+              <div class="metric"><span>timestep</span><strong id="mStep">0</strong></div>
+              <div class="metric"><span>distance</span><strong id="mDistance">-</strong></div>
+              <div class="metric"><span>chaser return</span><strong id="mChaserReturn">-</strong></div>
+              <div class="metric"><span>explorer return</span><strong id="mExplorerReturn">-</strong></div>
+              <div class="metric"><span>chaser action</span><strong id="mChaserAction">-</strong></div>
+              <div class="metric"><span>explorer action</span><strong id="mExplorerAction">-</strong></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Summary</h2>
+            <div class="metrics">
+              <div class="metric"><span>task</span><strong id="sTask">-</strong></div>
+              <div class="metric"><span>collisions</span><strong id="sCollisions">-</strong></div>
+              <div class="metric"><span>chaser fields</span><strong id="sChaserFields">-</strong></div>
+              <div class="metric"><span>explorer fields</span><strong id="sExplorerFields">-</strong></div>
+              <div class="metric"><span>chaser vision</span><strong id="sChaserVision">-</strong></div>
+              <div class="metric"><span>explorer vision</span><strong id="sExplorerVision">-</strong></div>
+              <div class="metric"><span>degenerate</span><strong id="sDegenerate">-</strong></div>
+              <div class="metric"><span>stationary steps</span><strong id="sStationarySteps">-</strong></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Action Probability</h2>
+            <div id="probabilities"></div>
+          </section>
+
+          <section class="panel">
+            <h2>Events</h2>
+            <div class="events" id="events"></div>
+          </section>
+
+          <section class="panel">
+            <h2>Seeds</h2>
+            <div class="events" id="seedComparison"></div>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <div id="message" class="message hidden"></div>
+
+    <script>
+      const canvas = document.getElementById("world");
+      const ctx = canvas.getContext("2d");
+      const checkpointPath = document.getElementById("checkpointPath");
+      const checkpointOptions = document.getElementById("checkpointOptions");
+      const checkpointCount = document.getElementById("checkpointCount");
+      const seedInput = document.getElementById("seedInput");
+      const opponentSelect = document.getElementById("opponentSelect");
+      const deviceSelect = document.getElementById("deviceSelect");
+      const deterministicSelect = document.getElementById("deterministicSelect");
+      const filterSelect = document.getElementById("filterSelect");
+      const loadButton = document.getElementById("loadButton");
+      const refreshButton = document.getElementById("refreshButton");
+      const prevButton = document.getElementById("prevButton");
+      const playButton = document.getElementById("playButton");
+      const nextButton = document.getElementById("nextButton");
+      const timeline = document.getElementById("timeline");
+      const speed = document.getElementById("speed");
+      const speedText = document.getElementById("speedText");
+      const message = document.getElementById("message");
+
+      let checkpoints = [];
+      let trajectory = null;
+      let frameIndex = 0;
+      let playing = false;
+      let lastAdvance = 0;
+      let animationFrame = 0;
+
+      const fmt = new Intl.NumberFormat("en", { maximumFractionDigits: 3 });
+
+      async function boot() {
+        bindControls();
+        await loadCheckpoints();
+        drawEmpty();
+        tick(0);
+      }
+
+      function bindControls() {
+        refreshButton.addEventListener("click", loadCheckpoints);
+        loadButton.addEventListener("click", loadTrajectory);
+        prevButton.addEventListener("click", () => setFrame(frameIndex - 1));
+        nextButton.addEventListener("click", () => setFrame(frameIndex + 1));
+        playButton.addEventListener("click", () => {
+          playing = !playing;
+          playButton.textContent = playing ? "Pause" : "Play";
+          lastAdvance = performance.now();
+        });
+        timeline.addEventListener("input", () => setFrame(Number(timeline.value)));
+        speed.addEventListener("input", () => {
+          speedText.textContent = `${Number(speed.value).toFixed(2).replace(/0$/, "")}x`;
+        });
+        window.addEventListener("resize", draw);
+      }
+
+      async function loadCheckpoints() {
+        setMessage("Loading checkpoints");
+        const response = await fetch("/api/checkpoints");
+        const data = await response.json();
+        if (!response.ok || data.error) throwMessage(data.message || "Failed to load checkpoints");
+        checkpoints = data.checkpoints || [];
+        checkpointOptions.innerHTML = "";
+        for (const item of checkpoints) {
+          const option = document.createElement("option");
+          option.value = item.path;
+          option.label = `${item.task || "task"} ${item.seed ?? ""} ${item.update ?? ""} ${item.modified}`;
+          checkpointOptions.append(option);
+        }
+        checkpointCount.textContent = `${checkpoints.length} checkpoints`;
+        if (checkpoints.length && !checkpointPath.value) checkpointPath.value = checkpoints[0].path;
+        renderSeedComparison();
+        clearMessage();
+      }
+
+      async function loadTrajectory() {
+        if (!checkpointPath.value) {
+          throwMessage("Select a checkpoint");
+          return;
+        }
+        setMessage("Generating trajectory");
+        loadButton.disabled = true;
+        try {
+          const params = new URLSearchParams({
+            checkpoint: checkpointPath.value,
+            seed: seedInput.value || "0",
+            deterministic: deterministicSelect.value,
+            opponent: opponentSelect.value,
+            device: deviceSelect.value,
+            filter_degenerate: filterSelect.value,
+          });
+          const response = await fetch(`/api/trajectory?${params.toString()}`);
+          const data = await response.json();
+          if (!response.ok || data.error) throw new Error(data.message || "Failed to load trajectory");
+          trajectory = data;
+          frameIndex = 0;
+          timeline.max = String(trajectory.frames.length - 1);
+          timeline.value = "0";
+          playing = false;
+          playButton.textContent = "Play";
+          updateInfo();
+          draw();
+          clearMessage();
+        } catch (error) {
+          throwMessage(error.message);
+        } finally {
+          loadButton.disabled = false;
+        }
+      }
+
+      function tick(now) {
+        if (playing && trajectory) {
+          const interval = 260 / Number(speed.value);
+          if (now - lastAdvance >= interval) {
+            if (frameIndex >= trajectory.frames.length - 1) {
+              playing = false;
+              playButton.textContent = "Play";
+            } else {
+              setFrame(frameIndex + 1);
+            }
+            lastAdvance = now;
+          }
+        }
+        animationFrame = requestAnimationFrame(tick);
+      }
+
+      function setFrame(index) {
+        if (!trajectory) return;
+        frameIndex = Math.max(0, Math.min(index, trajectory.frames.length - 1));
+        timeline.value = String(frameIndex);
+        updateInfo();
+        draw();
+      }
+
+      function currentFrame() {
+        return trajectory ? trajectory.frames[frameIndex] : null;
+      }
+
+      function updateInfo() {
+        const frame = currentFrame();
+        if (!trajectory || !frame) return;
+        byId("mStep").textContent = `${frame.t} / ${trajectory.frames.length - 1}`;
+        byId("mDistance").textContent = fmt.format(frame.distance);
+        byId("mChaserReturn").textContent = fmt.format(frame.returns.chaser);
+        byId("mExplorerReturn").textContent = fmt.format(frame.returns.explorer);
+        byId("mChaserAction").textContent = actionText(frame, "chaser");
+        byId("mExplorerAction").textContent = actionText(frame, "explorer");
+
+        const env = trajectory.config.env || {};
+        byId("sTask").textContent = env.task || "-";
+        byId("sCollisions").textContent = fmt.format(trajectory.summary.collisions);
+        byId("sChaserFields").textContent = fmt.format(trajectory.summary.chaser_new_fields);
+        byId("sExplorerFields").textContent = fmt.format(trajectory.summary.explorer_new_fields);
+        byId("sChaserVision").textContent = pct(trajectory.summary.chaser_partner_vision);
+        byId("sExplorerVision").textContent = pct(trajectory.summary.explorer_partner_vision);
+        byId("sDegenerate").textContent = trajectory.summary.degenerate ? "yes" : "no";
+        byId("sStationarySteps").textContent =
+          `${trajectory.summary.chaser_stationary_steps}/${trajectory.summary.explorer_stationary_steps}`;
+        renderProbabilities(frame);
+        renderEvents(frame);
+        renderBadges(frame);
+      }
+
+      function renderBadges(frame) {
+        const badges = document.getElementById("badges");
+        badges.innerHTML = "";
+        badges.append(badge(`C ${frame.chaser[0]},${frame.chaser[1]}`, "chaser"));
+        badges.append(badge(`E ${frame.explorer[0]},${frame.explorer[1]}`, "explorer"));
+        if (frame.events.collision) badges.append(badge("collision", "collision"));
+        if (frame.movement?.explorer?.blocked) badges.append(badge("E blocked", "collision"));
+        if (trajectory.summary.degenerate) badges.append(badge("degenerate", "degenerate"));
+        if (trajectory.filter?.filter_degenerate) {
+          badges.append(badge(`filtered ${trajectory.filter.attempts}`, ""));
+        }
+        if (frame.chaser_partner_visible) badges.append(badge("in vision", ""));
+      }
+
+      function renderSeedComparison() {
+        const root = byId("seedComparison");
+        if (!root) return;
+        root.innerHTML = "";
+        const latestByUnit = new Map();
+        for (const item of checkpoints) {
+          const key = `${item.task || "task"}:${item.seed ?? "seed"}`;
+          if (!latestByUnit.has(key)) latestByUnit.set(key, item);
+        }
+        for (const item of Array.from(latestByUnit.values()).slice(0, 24)) {
+          const metrics = item.metrics || {};
+          const node = document.createElement("span");
+          node.className = "event on";
+          node.textContent = `${item.task || "-"} s${item.seed ?? "-"} c${short(metrics.collisions_per_episode)} d${short(metrics.final_distance)}`;
+          root.append(node);
+        }
+      }
+
+      function badge(text, kind) {
+        const node = document.createElement("span");
+        node.className = `badge ${kind}`;
+        node.textContent = text;
+        return node;
+      }
+
+      function renderProbabilities(frame) {
+        const root = byId("probabilities");
+        root.innerHTML = "";
+        const labels = trajectory.action_labels || ["U", "R", "D", "L"];
+        probabilityBlock(root, "chaser", labels, frame.probabilities.chaser);
+        probabilityBlock(root, "explorer", labels, frame.probabilities.explorer);
+      }
+
+      function probabilityBlock(root, agent, labels, values) {
+        const probabilities = values || [0, 0, 0, 0];
+        for (let i = 0; i < labels.length; i += 1) {
+          const row = document.createElement("div");
+          row.className = `prob-row ${agent}`;
+          row.innerHTML = `<span>${labels[i]}</span><span class="bar"><i></i></span><span>${pct(probabilities[i])}</span>`;
+          row.querySelector("i").style.width = `${Math.max(0, Math.min(1, probabilities[i])) * 100}%`;
+          root.append(row);
+        }
+      }
+
+      function renderEvents(frame) {
+        const root = byId("events");
+        root.innerHTML = "";
+        const items = [
+          ["collision", frame.events.collision, "alert"],
+          ["chaser new", frame.events.chaser_new_field, ""],
+          ["explorer new", frame.events.explorer_new_field, ""],
+          ["approach", frame.events.chaser_approach, ""],
+          ["escape", frame.events.explorer_escape, ""],
+          ["near", frame.events.explorer_escape_near, ""],
+          ["far", frame.events.explorer_escape_far, ""],
+          ["C blocked", frame.movement?.chaser?.blocked, "alert"],
+          ["E blocked", frame.movement?.explorer?.blocked, "alert"],
+          ["degenerate", trajectory.summary.degenerate, "alert"],
+        ];
+        for (const [label, on, kind] of items) {
+          const node = document.createElement("span");
+          node.className = `event ${kind} ${on ? "on" : ""}`;
+          node.textContent = label;
+          root.append(node);
+        }
+      }
+
+      function draw() {
+        if (!trajectory) {
+          drawEmpty();
+          return;
+        }
+        const frame = currentFrame();
+        const env = trajectory.config.env || {};
+        const gridSize = env.grid_size || 10;
+        const visionRadius = env.vision_radius || 3;
+        const size = canvas.width;
+        ctx.clearRect(0, 0, size, size);
+        const pad = 48;
+        const board = size - pad * 2;
+        const cell = board / gridSize;
+        drawBoard(pad, board, cell, gridSize);
+        drawVision(frame, pad, cell, gridSize, visionRadius);
+        drawVisited(frame.chaser_visited, pad, cell, "rgba(216, 79, 69, 0.12)");
+        drawVisited(frame.explorer_visited, pad, cell, "rgba(33, 137, 168, 0.12)");
+        drawAgent(frame.chaser, pad, cell, getCss("--chaser"), "C");
+        drawAgent(frame.explorer, pad, cell, getCss("--explorer"), "E");
+        if (frame.events.collision) drawCollision(frame, pad, cell);
+      }
+
+      function drawEmpty() {
+        const size = canvas.width;
+        ctx.clearRect(0, 0, size, size);
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = "#697177";
+        ctx.font = "700 24px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText("Load a checkpoint", size / 2, size / 2);
+      }
+
+      function drawBoard(pad, board, cell, gridSize) {
+        ctx.fillStyle = "#fbfbf7";
+        ctx.fillRect(pad, pad, board, board);
+        ctx.strokeStyle = getCss("--grid");
+        ctx.lineWidth = 2;
+        for (let i = 0; i <= gridSize; i += 1) {
+          const p = pad + i * cell;
+          ctx.beginPath();
+          ctx.moveTo(p, pad);
+          ctx.lineTo(p, pad + board);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(pad, p);
+          ctx.lineTo(pad + board, p);
+          ctx.stroke();
+        }
+      }
+
+      function drawVision(frame, pad, cell, gridSize, radius) {
+        if (!frame.chaser_partner_visible) return;
+        const [row, col] = frame.chaser;
+        const minRow = Math.max(0, row - radius);
+        const maxRow = Math.min(gridSize - 1, row + radius);
+        const minCol = Math.max(0, col - radius);
+        const maxCol = Math.min(gridSize - 1, col + radius);
+        ctx.fillStyle = "rgba(196, 134, 43, 0.12)";
+        ctx.strokeStyle = "rgba(196, 134, 43, 0.55)";
+        ctx.lineWidth = 4;
+        ctx.fillRect(pad + minCol * cell, pad + minRow * cell, (maxCol - minCol + 1) * cell, (maxRow - minRow + 1) * cell);
+        ctx.strokeRect(pad + minCol * cell, pad + minRow * cell, (maxCol - minCol + 1) * cell, (maxRow - minRow + 1) * cell);
+      }
+
+      function drawVisited(points, pad, cell, color) {
+        ctx.fillStyle = color;
+        for (const [row, col] of points || []) {
+          ctx.fillRect(pad + col * cell + 3, pad + row * cell + 3, cell - 6, cell - 6);
+        }
+      }
+
+      function drawAgent(position, pad, cell, color, label) {
+        const [row, col] = position;
+        const x = pad + col * cell + cell / 2;
+        const y = pad + row * cell + cell / 2;
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.arc(x, y, cell * 0.31, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.font = `800 ${Math.max(18, cell * 0.28)}px system-ui`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, x, y + 1);
+      }
+
+      function drawCollision(frame, pad, cell) {
+        const [row, col] = frame.chaser;
+        const x = pad + col * cell + cell / 2;
+        const y = pad + row * cell + cell / 2;
+        ctx.strokeStyle = getCss("--danger");
+        ctx.lineWidth = 8;
+        ctx.beginPath();
+        ctx.arc(x, y, cell * 0.43, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      function actionText(frame, agent) {
+        const label = frame.actions[`${agent}_label`] || "-";
+        const movement = frame.movement?.[agent];
+        if (!movement || !movement.blocked) return label;
+        if (movement.blocked_by_collision) return `${label} collision`;
+        if (movement.blocked_by_wall) return `${label} wall`;
+        return `${label} blocked`;
+      }
+
+      function setMessage(text) {
+        message.className = "message";
+        message.textContent = text;
+      }
+
+      function clearMessage() {
+        message.className = "message hidden";
+        message.textContent = "";
+      }
+
+      function throwMessage(text) {
+        message.className = "message error";
+        message.textContent = text;
+      }
+
+      function byId(id) {
+        return document.getElementById(id);
+      }
+
+      function pct(value) {
+        if (value === null || value === undefined || Number.isNaN(value)) return "-";
+        return `${Math.round(Number(value) * 100)}%`;
+      }
+
+      function short(value) {
+        if (value === null || value === undefined || Number.isNaN(value)) return "-";
+        return Number(value).toFixed(1);
+      }
+
+      function getCss(name) {
+        return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      }
+
+      boot().catch((error) => throwMessage(error.message));
+    </script>
+  </body>
+</html>

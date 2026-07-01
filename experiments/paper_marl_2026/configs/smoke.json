@@ -1,0 +1,23 @@
+{
+  "batch_size": 4,
+  "checkpoint_every": 2,
+  "checkpoint_every_seconds": 0.0,
+  "concurrency": 1,
+  "cuda_tf32": true,
+  "device": "cpu",
+  "experiment": "paper-marl-smoke",
+  "experiment_spec": "experiments/paper_marl_2026/SPEC.md",
+  "finite_guard": true,
+  "log_every": 1,
+  "max_attempts": 1,
+  "max_steps": 8,
+  "preset": "paper_text",
+  "resume": false,
+  "seed_start": 0,
+  "seeds": 1,
+  "status_every_seconds": 1.0,
+  "subspace_metric_period": 2,
+  "tasks": "social",
+  "triton_env_step": false,
+  "updates": 2
+}

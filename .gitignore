@@ -170,6 +170,10 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# Training outputs
+runs/
+runs-archive/
+
 # PyPI configuration file
 .pypirc
 
