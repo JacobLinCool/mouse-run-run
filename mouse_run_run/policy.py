@@ -301,13 +301,71 @@ class SSMActorCritic(PolicyBase):
         )
 
     def hidden_sequence(self, observations: torch.Tensor) -> torch.Tensor:
-        steps, batch_size = observations.shape[:2]
-        state = self.initial_hidden(batch_size, observations.device)
-        hiddens = []
+        # Same math as stepping _cell, but the diagonal linear recurrence
+        # h_t = a_t * h_{t-1} + (1 - a_t) * u_t is evaluated with a chunked
+        # scan (intra-chunk iterations batched across chunks, then a short
+        # inter-chunk pass): ~L + T/L elementwise steps instead of T. A
+        # sequential 100-step autograd graph made the PPO update the training
+        # bottleneck (~24 h projected for the paper-scale experiment).
+        x = observations
+        for index in range(self.layers):
+            u = self.input_projections[index](x)
+            decay = torch.sigmoid(self.decay_projections[index](u))
+            h = _chunked_linear_scan(decay, (1.0 - decay) * u)
+            x = torch.relu(self.mix_projections[index](h))
+        return x
+
+
+def _scan_chunk_length(steps: int) -> int:
+    """Largest divisor of ``steps`` not exceeding ~sqrt(steps)."""
+    best = 1
+    limit = int(steps**0.5) + 1
+    for candidate in range(2, limit + 1):
+        if steps % candidate == 0:
+            best = candidate
+    return best
+
+
+def _chunked_linear_scan(decay: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+    """h_t = decay_t * h_{t-1} + value_t with h_0 = 0, over dim 0.
+
+    Exact reassociation of the sequential recurrence (no log/exp tricks, so
+    numerically it matches the step loop to float rounding): local scans run
+    with L iterations batched across all T/L chunks, chunk entries propagate
+    in T/L iterations, and cumprod(decay) folds the entry state back in.
+    """
+    steps = decay.shape[0]
+    chunk = _scan_chunk_length(steps)
+    if chunk <= 1:
+        outputs = []
+        state = torch.zeros_like(decay[0])
         for step in range(steps):
-            hidden, state = self._cell(observations[step], state)
-            hiddens.append(hidden)
-        return torch.stack(hiddens)
+            state = decay[step] * state + value[step]
+            outputs.append(state)
+        return torch.stack(outputs)
+
+    chunks = steps // chunk
+    tail_shape = decay.shape[1:]
+    decay_c = decay.view(chunks, chunk, *tail_shape)
+    value_c = value.view(chunks, chunk, *tail_shape)
+
+    # Local scans with zero entry state, all chunks in parallel.
+    locals_list = []
+    running = torch.zeros_like(decay_c[:, 0])
+    for index in range(chunk):
+        running = decay_c[:, index] * running + value_c[:, index]
+        locals_list.append(running)
+    local = torch.stack(locals_list, dim=1)
+
+    # Entry state of each chunk from the previous chunk's exit.
+    cumulative_decay = torch.cumprod(decay_c, dim=1)
+    entries = [torch.zeros_like(decay_c[0, 0])]
+    for index in range(chunks - 1):
+        entries.append(cumulative_decay[index, -1] * entries[-1] + local[index, -1])
+    entry = torch.stack(entries)
+
+    combined = cumulative_decay * entry.unsqueeze(1) + local
+    return combined.view(steps, *tail_shape)
 
 
 class TransformerActorCritic(PolicyBase):

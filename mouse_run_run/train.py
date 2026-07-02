@@ -164,8 +164,8 @@ def train(
         cost_per_hour=config.cost_per_hour,
         device=str(device),
     )
-    if config.fused_agent_rollout and config.architecture != "rnn":
-        raise ValueError("fused_agent_rollout is only implemented for the rnn architecture")
+    if config.fused_agent_rollout and config.architecture not in ("rnn", "ssm"):
+        raise ValueError("fused_agent_rollout is only implemented for rnn and ssm")
     env = BatchedChaseEnv(config.env, config.batch_size, device)
     chaser = build_policy(
         config.architecture,
@@ -391,17 +391,16 @@ def _collect_rollout(
     explorer_subspace_norms: list[torch.Tensor] = []
     record_subspace_metrics = capture_metrics and config.subspace_metric_period > 0
     use_index_path = config.architecture == "rnn"
-    fused_pair = (
-        _FusedAgentPair(
+    fused_pair = None
+    if config.fused_agent_rollout:
+        fused_class = _FusedAgentPair if config.architecture == "rnn" else _FusedSSMPair
+        fused_pair = fused_class(
             chaser,
             explorer,
             observation_size=config.env.observation_size,
             batch_size=batch_size,
             device=device,
         )
-        if config.fused_agent_rollout
-        else None
-    )
 
     for step_index in range(max_steps):
         chaser_flat_index = _flat_position(env.chaser_position, grid_size)
@@ -582,6 +581,135 @@ def _observation_from_flat(
     observation[batch_index, own_flat] = 1.0
     observation[batch_index, grid_cells + other_flat] = other_visible.to(observation.dtype)
     return observation
+
+
+class _FusedSSMPair:
+    """Both SSM agents' rollout forwards as one stacked batch.
+
+    Mirrors _FusedAgentPair: the first layer's input projection over one-hot
+    observations becomes a row gather from a stacked table, every dense layer
+    becomes a bmm over the (2, batch, hidden) stack, and the diagonal linear
+    recurrence stays elementwise. Weights are snapshotted once per rollout.
+    """
+
+    def __init__(
+        self,
+        chaser,
+        explorer,
+        *,
+        observation_size: int,
+        batch_size: int,
+        device: torch.device,
+    ) -> None:
+        self.observation_size = observation_size
+        self.hidden_size = chaser.hidden_size
+        self.layers = chaser.layers
+        self.input_table = torch.cat(
+            [chaser.input_projections[0].weight.T, explorer.input_projections[0].weight.T],
+            dim=0,
+        ).contiguous()
+        self.input_bias0 = torch.stack(
+            [chaser.input_projections[0].bias, explorer.input_projections[0].bias]
+        ).unsqueeze(1)
+        self.deep_input_weights = [
+            torch.stack(
+                [
+                    chaser.input_projections[index].weight.T,
+                    explorer.input_projections[index].weight.T,
+                ]
+            ).contiguous()
+            for index in range(1, self.layers)
+        ]
+        self.deep_input_biases = [
+            torch.stack(
+                [chaser.input_projections[index].bias, explorer.input_projections[index].bias]
+            ).unsqueeze(1)
+            for index in range(1, self.layers)
+        ]
+        self.decay_weights = [
+            torch.stack(
+                [
+                    chaser.decay_projections[index].weight.T,
+                    explorer.decay_projections[index].weight.T,
+                ]
+            ).contiguous()
+            for index in range(self.layers)
+        ]
+        self.decay_biases = [
+            torch.stack(
+                [chaser.decay_projections[index].bias, explorer.decay_projections[index].bias]
+            ).unsqueeze(1)
+            for index in range(self.layers)
+        ]
+        self.mix_weights = [
+            torch.stack(
+                [
+                    chaser.mix_projections[index].weight.T,
+                    explorer.mix_projections[index].weight.T,
+                ]
+            ).contiguous()
+            for index in range(self.layers)
+        ]
+        self.mix_biases = [
+            torch.stack(
+                [chaser.mix_projections[index].bias, explorer.mix_projections[index].bias]
+            ).unsqueeze(1)
+            for index in range(self.layers)
+        ]
+        self.action_weight_t = torch.stack(
+            [chaser.action_layer.weight.T, explorer.action_layer.weight.T]
+        ).contiguous()
+        self.action_bias = torch.stack(
+            [chaser.action_layer.bias, explorer.action_layer.bias]
+        ).unsqueeze(1)
+        self.value_weight_t = torch.stack(
+            [chaser.value_layer.weight.T, explorer.value_layer.weight.T]
+        ).contiguous()
+        self.value_bias = torch.stack(
+            [chaser.value_layer.bias, explorer.value_layer.bias]
+        ).unsqueeze(1)
+        self.states = torch.zeros(self.layers, 2, batch_size, self.hidden_size, device=device)
+
+    def step(
+        self,
+        chaser_flat_index: torch.Tensor,
+        explorer_flat_index: torch.Tensor,
+        partner_visible: torch.Tensor,
+    ) -> tuple[PolicyOutput, PolicyOutput]:
+        observation_size = self.observation_size
+        half = observation_size // 2
+        own_index = torch.cat([chaser_flat_index, observation_size + explorer_flat_index])
+        other_index = torch.cat(
+            [half + explorer_flat_index, observation_size + half + chaser_flat_index]
+        )
+        visible = partner_visible.to(self.input_table.dtype).unsqueeze(1)
+        x = (
+            self.input_table[own_index] + self.input_table[other_index] * visible.repeat(2, 1)
+        ).view(2, -1, self.hidden_size) + self.input_bias0
+
+        next_states = []
+        for index in range(self.layers):
+            u = (
+                x
+                if index == 0
+                else torch.baddbmm(
+                    self.deep_input_biases[index - 1], x, self.deep_input_weights[index - 1]
+                )
+            )
+            decay = torch.sigmoid(
+                torch.baddbmm(self.decay_biases[index], u, self.decay_weights[index])
+            )
+            state = decay * self.states[index] + (1.0 - decay) * u
+            next_states.append(state)
+            x = torch.relu(torch.baddbmm(self.mix_biases[index], state, self.mix_weights[index]))
+        self.states = torch.stack(next_states)
+
+        logits = torch.baddbmm(self.action_bias, x, self.action_weight_t)
+        values = torch.baddbmm(self.value_bias, x, self.value_weight_t).squeeze(-1)
+        return (
+            PolicyOutput(logits=logits[0], value=values[0], hidden=x[0], state=None),
+            PolicyOutput(logits=logits[1], value=values[1], hidden=x[1], state=None),
+        )
 
 
 class _FusedAgentPair:
