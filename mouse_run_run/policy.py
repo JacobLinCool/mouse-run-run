@@ -41,11 +41,30 @@ class PolicyBase(nn.Module):
     def forward(self, observation: torch.Tensor, state: Any) -> PolicyOutput:
         raise NotImplementedError
 
+    def hidden_sequence(self, observations: torch.Tensor) -> torch.Tensor:
+        """Teacher-forced analysis representations for a full episode.
+
+        (steps, batch, obs) -> (steps, batch, hidden). Default threads
+        ``forward`` step by step; subclasses override with parallel forms.
+        """
+        state = self.initial_hidden(observations.shape[1], observations.device)
+        hiddens = []
+        for step in range(observations.shape[0]):
+            output = self.forward(observations[step], state)
+            hiddens.append(output.hidden)
+            state = output.state
+        return torch.stack(hiddens)
+
     def sequence(
         self,
         observations: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        raise NotImplementedError
+        hidden = self.hidden_sequence(observations)
+        return (
+            self.action_layer(hidden),
+            self.value_layer(hidden).squeeze(-1),
+            hidden[-1],
+        )
 
     def recurrent_weight_norm(self) -> torch.Tensor:
         """L2-penalized recurrent weight norm; zero when no analog exists."""
@@ -120,18 +139,11 @@ class RNNActorCritic(PolicyBase):
             state=next_hidden,
         )
 
-    def sequence(
-        self,
-        observations: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def hidden_sequence(self, observations: torch.Tensor) -> torch.Tensor:
         batch_size = observations.shape[1]
         hidden = self.initial_hidden(batch_size, observations.device).unsqueeze(0)
-        hidden_sequence, final_hidden = self.rnn(observations, hidden)
-        return (
-            self.action_layer(hidden_sequence),
-            self.value_layer(hidden_sequence).squeeze(-1),
-            final_hidden.squeeze(0),
-        )
+        hidden_sequence, _ = self.rnn(observations, hidden)
+        return hidden_sequence
 
     def recurrent_weight_norm(self) -> torch.Tensor:
         return self.rnn.weight_hh_l0.norm()
@@ -191,10 +203,7 @@ class MLPStackActorCritic(PolicyBase):
             state=window,
         )
 
-    def sequence(
-        self,
-        observations: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def hidden_sequence(self, observations: torch.Tensor) -> torch.Tensor:
         steps, batch_size = observations.shape[:2]
         padded = torch.cat(
             [
@@ -211,12 +220,7 @@ class MLPStackActorCritic(PolicyBase):
         )
         # (steps, batch, frame_stack, obs): window t covers obs[t-k+1 .. t].
         windows = padded.unfold(0, self.frame_stack, 1).permute(0, 1, 3, 2)
-        hidden = self._heads(windows)
-        return (
-            self.action_layer(hidden),
-            self.value_layer(hidden).squeeze(-1),
-            hidden[-1],
-        )
+        return self._heads(windows)
 
 
 class SSMActorCritic(PolicyBase):
@@ -296,22 +300,14 @@ class SSMActorCritic(PolicyBase):
             state=next_state,
         )
 
-    def sequence(
-        self,
-        observations: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def hidden_sequence(self, observations: torch.Tensor) -> torch.Tensor:
         steps, batch_size = observations.shape[:2]
         state = self.initial_hidden(batch_size, observations.device)
         hiddens = []
         for step in range(steps):
             hidden, state = self._cell(observations[step], state)
             hiddens.append(hidden)
-        hidden_sequence = torch.stack(hiddens)
-        return (
-            self.action_layer(hidden_sequence),
-            self.value_layer(hidden_sequence).squeeze(-1),
-            hidden_sequence[-1],
-        )
+        return torch.stack(hiddens)
 
 
 class TransformerActorCritic(PolicyBase):
@@ -442,19 +438,11 @@ class TransformerActorCritic(PolicyBase):
             state=state,
         )
 
-    def sequence(
-        self,
-        observations: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def hidden_sequence(self, observations: torch.Tensor) -> torch.Tensor:
         steps = observations.shape[0]
         positions = torch.arange(steps, device=observations.device)
         mask = torch.ones(steps, steps, dtype=torch.bool, device=observations.device).tril()
-        hidden = self._trunk(observations, positions, state=None, causal_mask=mask)
-        return (
-            self.action_layer(hidden),
-            self.value_layer(hidden).squeeze(-1),
-            hidden[-1],
-        )
+        return self._trunk(observations, positions, state=None, causal_mask=mask)
 
 
 ARCHITECTURES = {
