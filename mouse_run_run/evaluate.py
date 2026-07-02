@@ -7,7 +7,7 @@ from torch.distributions import Categorical
 
 from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
-from mouse_run_run.policy import RNNActorCritic
+from mouse_run_run.policy import PolicyBase, build_policy
 from mouse_run_run.serialization import load_checkpoint
 from mouse_run_run.train import select_device
 
@@ -57,11 +57,14 @@ def evaluate_checkpoint(
     if max_steps is not None:
         env_config = replace(env_config, max_steps=max_steps)
 
-    chaser = RNNActorCritic(
+    architecture = config.get("architecture", "rnn")
+    chaser = build_policy(
+        architecture,
         env_config.observation_size,
         hidden_size=config["hidden_size"],
     ).to(device)
-    explorer = RNNActorCritic(
+    explorer = build_policy(
+        architecture,
         env_config.observation_size,
         hidden_size=config["hidden_size"],
     ).to(device)
@@ -129,8 +132,8 @@ def _evaluate_batch(
     *,
     env_config: GridWorldConfig,
     batch_size: int,
-    chaser: RNNActorCritic,
-    explorer: RNNActorCritic,
+    chaser: PolicyBase,
+    explorer: PolicyBase,
     device: torch.device,
     deterministic: bool,
     opponent_mode: OpponentMode,
@@ -166,13 +169,13 @@ def _evaluate_batch(
         else:
             chaser_output = chaser(chaser_observation, chaser_hidden)
             chaser_action = _select_action(chaser_output.logits, deterministic)
-            chaser_hidden = chaser_output.hidden
+            chaser_hidden = chaser_output.state
         if opponent_mode == "random_explorer":
             explorer_action = torch.randint(4, (batch_size,), device=device)
         else:
             explorer_output = explorer(explorer_observation, explorer_hidden)
             explorer_action = _select_action(explorer_output.logits, deterministic)
-            explorer_hidden = explorer_output.hidden
+            explorer_hidden = explorer_output.state
 
         result = env.step(chaser_action, explorer_action)
         chaser_actions.append(chaser_action)

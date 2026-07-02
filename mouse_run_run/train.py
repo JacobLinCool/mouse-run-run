@@ -17,7 +17,7 @@ from mouse_run_run.health import (
     require_healthy_checkpoint,
 )
 from mouse_run_run.observability import TrainingObserver
-from mouse_run_run.policy import PolicyOutput, RNNActorCritic
+from mouse_run_run.policy import PolicyBase, PolicyOutput, RNNActorCritic, build_policy
 from mouse_run_run.serialization import (
     TrainingState,
     load_checkpoint,
@@ -33,6 +33,8 @@ DEVICE_CHOICES = ("auto", "cpu", "mps", "cuda")
 class TrainConfig:
     updates: int = 200
     batch_size: int = 40
+    # Agent architecture: "rnn" (paper), "mlp", "ssm", or "transformer".
+    architecture: str = "rnn"
     hidden_size: int = 256
     gamma: float = 0.99
     gae_lambda: float = 0.95
@@ -162,12 +164,16 @@ def train(
         cost_per_hour=config.cost_per_hour,
         device=str(device),
     )
+    if config.fused_agent_rollout and config.architecture != "rnn":
+        raise ValueError("fused_agent_rollout is only implemented for the rnn architecture")
     env = BatchedChaseEnv(config.env, config.batch_size, device)
-    chaser = RNNActorCritic(
+    chaser = build_policy(
+        config.architecture,
         config.env.observation_size,
         hidden_size=config.hidden_size,
     ).to(device)
-    explorer = RNNActorCritic(
+    explorer = build_policy(
+        config.architecture,
         config.env.observation_size,
         hidden_size=config.hidden_size,
     ).to(device)
@@ -384,6 +390,7 @@ def _collect_rollout(
     chaser_subspace_norms: list[torch.Tensor] = []
     explorer_subspace_norms: list[torch.Tensor] = []
     record_subspace_metrics = capture_metrics and config.subspace_metric_period > 0
+    use_index_path = config.architecture == "rnn"
     fused_pair = (
         _FusedAgentPair(
             chaser,
@@ -411,7 +418,7 @@ def _collect_rollout(
                 explorer_flat_index,
                 partner_visible,
             )
-        else:
+        elif use_index_path:
             chaser_output = chaser.forward_one_hot_indices(
                 own_index=chaser_flat_index,
                 other_index=grid_cells + explorer_flat_index,
@@ -423,6 +430,19 @@ def _collect_rollout(
                 other_index=grid_cells + chaser_flat_index,
                 other_visible=partner_visible,
                 hidden=explorer_hidden,
+            )
+        else:
+            chaser_output = chaser(
+                _observation_from_flat(
+                    chaser_flat_index, explorer_flat_index, partner_visible, grid_cells
+                ),
+                chaser_hidden,
+            )
+            explorer_output = explorer(
+                _observation_from_flat(
+                    explorer_flat_index, chaser_flat_index, partner_visible, grid_cells
+                ),
+                explorer_hidden,
             )
         # No per-step finite check here: even the sync-free accumulated-flag
         # variant costs ~24% of rollout wall time in kernel launches, and a
@@ -467,8 +487,8 @@ def _collect_rollout(
                 explorer.neural_action_subspace(explorer_output.hidden).norm(dim=1)
             )
 
-        chaser_hidden = chaser_output.hidden
-        explorer_hidden = explorer_output.hidden
+        chaser_hidden = chaser_output.state
+        explorer_hidden = explorer_output.state
 
     chaser_advantage, chaser_return = _gae(
         rewards=chaser_reward_tensor,
@@ -547,6 +567,21 @@ def _collect_rollout(
 
 def _flat_position(position: torch.Tensor, grid_size: int) -> torch.Tensor:
     return position[:, 0] * grid_size + position[:, 1]
+
+
+def _observation_from_flat(
+    own_flat: torch.Tensor,
+    other_flat: torch.Tensor,
+    other_visible: torch.Tensor,
+    grid_cells: int,
+) -> torch.Tensor:
+    """Materialize the 2-channel one-hot observation from flat positions."""
+    batch_size = own_flat.shape[0]
+    observation = torch.zeros(batch_size, 2 * grid_cells, device=own_flat.device)
+    batch_index = torch.arange(batch_size, device=own_flat.device)
+    observation[batch_index, own_flat] = 1.0
+    observation[batch_index, grid_cells + other_flat] = other_visible.to(observation.dtype)
+    return observation
 
 
 class _FusedAgentPair:
@@ -961,7 +996,7 @@ def _restore_training_state(
         raise FileNotFoundError(f"resume checkpoint not found: {path}")
     saved_config, _, chaser_state, explorer_state = load_checkpoint(path)
     current_config = _checkpoint_config(config)
-    for key in ("env", "batch_size", "hidden_size", "seed"):
+    for key in ("env", "batch_size", "architecture", "hidden_size", "seed"):
         if saved_config.get(key) != current_config.get(key):
             raise ValueError(
                 f"resume checkpoint {path} was trained with {key}="

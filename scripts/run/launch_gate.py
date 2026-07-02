@@ -113,7 +113,12 @@ def _check_config_schema(config: dict[str, Any]) -> dict[str, Any]:
 
 def _check_primary_expectations(config: dict[str, Any]) -> list[dict[str, Any]]:
     checks = []
-    for key, expected in PRIMARY_EXPECTATIONS.items():
+    expectations = dict(PRIMARY_EXPECTATIONS)
+    # The fused rollout is an RNN-only fast path; architecture variants must
+    # run with it disabled.
+    if config.get("architecture", "rnn") != "rnn":
+        expectations["fused_agent_rollout"] = False
+    for key, expected in expectations.items():
         checks.append(
             {
                 "name": f"primary_{key}",

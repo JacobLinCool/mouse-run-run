@@ -124,13 +124,38 @@ Outputs:
 
 ```bash
 uv run python scripts/analysis/summarize_experiment.py runs/tables/{experiment}
+uv run python scripts/analysis/analyze_neural.py runs/{experiment}/paper_rollouts \
+  --output-root runs/reports/{experiment}/neural
+uv run python scripts/analysis/analyze_shared_neural.py runs/{experiment}/paper_rollouts \
+  --output-root runs/reports/{experiment}/shared_neural
 ```
 
 Outputs:
 
 - `runs/reports/{experiment}/summary.json`
-- `runs/reports/{experiment}/report.md`
+- `runs/reports/{experiment}/report.md` (mean ± std tables per task)
+- `runs/reports/{experiment}/figures/` (training curves, evaluation comparison)
 - `runs/reports/{experiment}/MANIFEST.json`
+- `runs/reports/{experiment}/neural/neural_summary.json` (single-network
+  diagnostics: PCA participation ratio and dimensionality, hidden-state speed,
+  visibility-modulated unit fraction, per rollout and aggregated social vs
+  non_social)
+- `runs/reports/{experiment}/neural/figures/` (per-checkpoint activation
+  rasters, PCA spectra, PC embeddings, collision-triggered hidden-state speed;
+  aggregate comparison)
+- `runs/reports/{experiment}/neural/MANIFEST.json`
+- `runs/reports/{experiment}/shared_neural/shared_neural_summary.json`
+  (cross-agent PLSC: significant shared-dimension count and top-dimension
+  correlation, per pair and aggregated social vs non_social, with a
+  temporal-permutation null; reproduces the paper's C3 claim)
+- `runs/reports/{experiment}/shared_neural/figures/` (per-pair shared-dimension
+  spectra vs null, top shared dimension scatter, latent correlations; aggregate
+  comparison)
+- `runs/reports/{experiment}/shared_neural/MANIFEST.json`
+
+Neural analysis panels use `paper_neural_behavior_non_degenerate_v1`:
+degenerate episodes are excluded before pooling hidden states. The PLSC
+permutation seed is fixed (default 0) so significance is reproducible.
 
 ## Known Limitations
 
@@ -141,3 +166,5 @@ This is a modern implementation, not the original RLlib code. The primary preset
 - 2026-07-02: Initial formal spec. Fixed primary preset to `paper_text`, retained Triton env-only acceleration, and defined NaN checkpoints as failed attempts rather than exclusions.
 - 2026-07-02 (rev 2, pre-launch review): degenerate rule reinterpreted as longest consecutive stuck run excluding collision-blocked steps; interrupted attempts no longer consume `max_attempts` and resume from checkpoint (optimizer/RNG state now serialized); per-agent gradient clipping (was joint); approach/escape events gated on new-field per official event precedence; paper evaluation/rollout selection fixed to the latest successful attempt per unit with a shared seed; evaluation summary grouped by task; 24h attempt timeout; launch gate binds the Triton equivalence record to the current git sha.
 - 2026-07-02 (rev 3, performance round on a 4070 Ti Super): added RLlib-style `value_clip` (10.0, the RLlib 2.2 `vf_clip_param` default the official code inherited) after observing value-function divergence with per-agent clipping and zero recurrent L2; enabled `fused_agent_rollout` in the primary config (stacked two-agent rollout forward, bit-exact vs unfused on CPU fp32); rollout finite guarding moved entirely to post-rollout validation. Measured 142.9k aggregate steps/s at concurrency 10 (~3.1 h projected for all 20 pairs), from 90.5k pre-review.
+- 2026-07-02 (rev 4, analysis tooling): summarize_experiment now renders mean ± std tables and training-curve/evaluation figures; added `scripts/analysis/analyze_neural.py` (PCA participation ratio and dimensionality, activation rasters, PC embeddings, collision-triggered hidden-state speed, visibility-modulated unit fraction over the non-degenerate rollout panel). No change to training, evaluation, or exclusion rules; raw evidence and canonical tables are unchanged.
+- 2026-07-02 (rev 5, PLSC): added `scripts/analysis/analyze_shared_neural.py`, the cross-agent shared-dimension analysis (PLSC) that reproduces claim C3. Per trained pair it z-scores both agents' non-degenerate hidden states, takes the SVD of the cross-covariance matrix, and tests each singular value against a fixed-seed temporal-permutation null; it reports the significant shared-dimension count and top-dimension correlation, aggregated social vs non_social. No change to training, evaluation, or exclusion rules. SVM decoding, the neural-action-space partner-representation GLM, and null-space perturbation (C4/C5) remain unimplemented.

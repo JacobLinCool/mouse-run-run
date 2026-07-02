@@ -370,7 +370,21 @@ Remaining gaps:
 
 - This is not an exact RLlib 2.2 reproduction; PPO defaults (KL-penalty PPO) and sequence batching differ — the port uses clipped PPO.
 - It has not yet trained ten independent social/non-social seed pairs.
-- It does not yet implement PLSC, SVM decoding, neural-action-space partner-representation GLMs, or null-space perturbation.
+- PLSC shared-dimension extraction with temporal-permutation significance is
+  implemented in `mouse_run_run/plsc.py` (the reusable core) and consumed by
+  both `scripts/analysis/analyze_shared_neural.py` (offline: z-scored hidden
+  states, cross-covariance SVD, per-rank permutation null, significant-dimension
+  count and top-dimension correlation, aggregated social vs non_social, C3) and
+  the interactive viewer's "Shared & Unique Subspace" panel (pools self-play
+  episodes for a checkpoint, shows the cross-covariance → SVD → shared/unique
+  split as a numbered pipeline, the spectrum vs null, the variance split, and a
+  pooled episode's shared/unique norm over time; it warns when the pool is
+  rank-deficient). Not yet implemented: SVM balanced-accuracy decoding,
+  neural-action-space partner-representation GLMs, and null-space perturbation
+  (C4/C5). `analyze_neural.py` and the Network Activity panel provide
+  single-network diagnostics (PCA, rasters, event-triggered speed, visibility
+  tuning), which are exploratory rather than a reproduction of the paper's
+  cross-agent analyses.
 - The L2 regularization discrepancy between paper text (`lambda = 0.3`) and official code/demo params (`3.0`) is not resolved; the `paper_text` preset uses 0.3, `official_code` uses 3.0 (both as an unsquared Frobenius norm on the recurrent weights, exactly matching the official `custom_loss`).
 - Environment spawn domain is `0..grid_size-1` per paper text; the official code's `np.random.randint(height - 1)` never spawns on the last row/column (likely an off-by-one). This intentional difference changes the initial-state distribution slightly.
 
@@ -392,7 +406,8 @@ Recent smoke result:
 
 3. Implement analysis modules.
    - SVM balanced-accuracy decoding;
-   - PLSC shared dimension extraction and temporal permutation significance;
+   - PLSC shared dimension extraction and temporal permutation significance —
+     done (`scripts/analysis/analyze_shared_neural.py`);
    - neural-action-space partner representation;
    - null-space perturbation of top 10 PLSCs;
    - random-PC perturbation control.

@@ -14,6 +14,11 @@ def main() -> None:
     parser.add_argument("--vision-radius", type=int, default=3)
     parser.add_argument("--task", choices=("social", "non_social"), default="social")
     parser.add_argument("--partner-visibility", choices=("partial", "none", "full"))
+    parser.add_argument(
+        "--architecture",
+        choices=("rnn", "mlp", "ssm", "transformer"),
+        default="rnn",
+    )
     parser.add_argument("--hidden-size", type=int, default=256)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
@@ -78,6 +83,7 @@ def main() -> None:
     config = TrainConfig(
         updates=args.updates,
         batch_size=args.batch_size,
+        architecture=args.architecture,
         hidden_size=args.hidden_size,
         gamma=args.gamma,
         gae_lambda=args.gae_lambda,

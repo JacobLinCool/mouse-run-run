@@ -87,6 +87,32 @@ Open an interactive trajectory viewer for saved checkpoints:
 uv run visualize-marl --runs-root runs --port 8765
 ```
 
+Besides the grid-world playback, the viewer shows the network activity behind
+every step: a peak-sorted units × time activation raster per agent, the hidden
+state trajectory in PC1–PC2 space (partner-visible steps ringed in amber), and
+value estimate / action-subspace norm / distance timelines, plus a 16×16
+snapshot of the current hidden activation. All charts share the playback
+cursor, are clickable to seek, and the transport answers to the keyboard
+(Space play/pause, ←/→ step, Shift for ±5, Home/End).
+
+The **Shared & Unique Subspace (PLSC)** panel makes the paper's cross-agent
+decomposition (Fig. 5/6, C3) interactive. Press Compute and the viewer pools
+self-play episodes for the loaded checkpoint, excludes degenerate ones, builds
+the z-scored cross-covariance of the two agents' hidden states, and shows the
+computation as a five-step pipeline with live numbers: pooled samples →
+`R = Xᶜᵀ Xᵉ / (n−1)` → SVD + temporal-permutation null → shared subspace
+(significant dimensions) → unique complement. It renders the singular-value
+spectrum against the null band, the cross-covariance heatmap, each agent's
+shared-vs-unique variance split, and one pooled episode's activity norm
+decomposed into shared and unique parts over time (cursor-linked to playback).
+It uses the same `mouse_run_run.plsc` core as the offline
+`analyze_shared_neural.py`, and warns when the pool is rank-deficient
+(samples < hidden units), which happens on short smoke checkpoints but not at
+the paper's 25×500 analysis scale. Query parameters
+(`?checkpoint=...&seed=3&deterministic=false&t=18`) preload and auto-play a
+trajectory, which makes states linkable and screenshotable (`&ss=1` also
+computes the PLSC subspace panel).
+
 Checkpoints and rollout files use `safetensors`. Config and metrics are stored
 as JSON metadata; model weights and rollout arrays are stored as tensor payloads.
 The rollout file stores hidden states, observations, actions, positions, rewards,
@@ -177,6 +203,50 @@ uv run collect-paper-marl-rollouts runs/mouse-run-run-0701 \
 uv run python scripts/transform/build_tables.py runs/mouse-run-run-0701
 uv run python scripts/analysis/summarize_experiment.py runs/tables/mouse-run-run-0701
 ```
+
+`summarize_experiment.py` writes `runs/reports/<experiment>/report.md` with
+mean ± std tables per task, plus `figures/training_curves.png` (per-update
+mean ± std bands across valid pairs, social vs non_social) and
+`figures/evaluation_comparison.png` (random-opponent metrics grouped by
+opponent mode and task). Pass `--no-figures` for a tables-only report.
+
+Run the network-activation analysis over the paper rollouts:
+
+```bash
+uv run python scripts/analysis/analyze_neural.py runs/mouse-run-run-0701/paper_rollouts \
+  --output-root runs/reports/mouse-run-run-0701/neural
+```
+
+For each rollout (degenerate episodes excluded, matching the paper rule) this
+produces a per-checkpoint figure — peak-sorted activation rasters, PCA
+variance spectrum, the PC1–PC2 hidden-state embedding colored by
+chaser-explorer distance, and collision-triggered hidden-state speed — plus a
+social vs non_social aggregate over PCA participation ratio, dimensionality,
+hidden-state speed, and the fraction of partner-visibility-modulated units.
+Statistics land in `neural_summary.json` with input hashes in `MANIFEST.json`.
+
+`analyze_neural.py` describes one network at a time. The paper's central neural
+result (Fig. 5/6, claim C3) is about structure *shared between the two agents*,
+measured with Partial Least Squares Correlation (PLSC). Reproduce it with:
+
+```bash
+uv run python scripts/analysis/analyze_shared_neural.py runs/mouse-run-run-0701/paper_rollouts \
+  --output-root runs/reports/mouse-run-run-0701/shared_neural
+```
+
+For each trained pair this z-scores the two agents' time-aligned hidden states,
+takes the SVD of their cross-covariance matrix, and tests each shared dimension
+against a temporal-permutation null (one agent's timepoints shuffled). It
+reports the number of significant shared dimensions and the top-dimension
+correlation per pair and aggregated by task, so social and non_social pairs can
+be compared as in the paper. Where PCA is an SVD of one agent's data matrix
+(maximum variance within a network), PLSC is an SVD of the cross-covariance
+matrix (maximum covariance between networks). Outputs are
+`shared_neural_summary.json`, per-pair spectra/scatter figures, an aggregate
+comparison, and `MANIFEST.json`; the permutation seed is fixed so results are
+reproducible. Still unimplemented from the paper: SVM decoding, the
+neural-action-space partner-representation GLM, and null-space perturbation
+(C4/C5).
 
 Upload artifacts to Hugging Face:
 

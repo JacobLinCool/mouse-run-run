@@ -45,6 +45,11 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
     parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument(
+        "--architecture",
+        choices=("rnn", "mlp", "ssm", "transformer"),
+        default="rnn",
+    )
     parser.add_argument("--hidden-size", type=int, default=256)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument(
@@ -130,6 +135,7 @@ def _worker() -> None:
         TrainConfig(
             updates=payload["updates"],
             batch_size=payload["batch_size"],
+            architecture=payload.get("architecture", "rnn"),
             hidden_size=payload["hidden_size"],
             learning_rate=payload["learning_rate"],
             ppo_epochs=payload["ppo_epochs"],
@@ -381,6 +387,7 @@ class ExperimentRunner:
             "batch_size": self.args.batch_size,
             "max_steps": self.args.max_steps,
             "ppo_epochs": self.args.ppo_epochs,
+            "architecture": self.args.architecture,
             "hidden_size": self.args.hidden_size,
             "learning_rate": self.args.learning_rate,
             "preset": self.args.preset,
@@ -699,6 +706,7 @@ class ExperimentRunner:
             "batch_size": self.args.batch_size,
             "max_steps": self.args.max_steps,
             "ppo_epochs": self.args.ppo_epochs,
+            "architecture": self.args.architecture,
             "hidden_size": self.args.hidden_size,
             "learning_rate": self.args.learning_rate,
             "preset": self.args.preset,

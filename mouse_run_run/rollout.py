@@ -9,7 +9,7 @@ from torch.distributions import Categorical
 from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
 from mouse_run_run.evaluate import OpponentMode
-from mouse_run_run.policy import RNNActorCritic
+from mouse_run_run.policy import PolicyBase, build_policy
 from mouse_run_run.serialization import load_checkpoint, save_rollout
 from mouse_run_run.train import select_device
 
@@ -50,11 +50,14 @@ def collect_rollouts(
     if max_steps is not None:
         env_config = replace(env_config, max_steps=max_steps)
 
-    chaser = RNNActorCritic(
+    architecture = config.get("architecture", "rnn")
+    chaser = build_policy(
+        architecture,
         env_config.observation_size,
         hidden_size=config["hidden_size"],
     ).to(device)
-    explorer = RNNActorCritic(
+    explorer = build_policy(
+        architecture,
         env_config.observation_size,
         hidden_size=config["hidden_size"],
     ).to(device)
@@ -120,8 +123,8 @@ def _collect_batch(
     *,
     env_config: GridWorldConfig,
     batch_size: int,
-    chaser: RNNActorCritic,
-    explorer: RNNActorCritic,
+    chaser: PolicyBase,
+    explorer: PolicyBase,
     device: torch.device,
     deterministic: bool,
     opponent_mode: OpponentMode,
@@ -204,8 +207,8 @@ def _collect_batch(
         records["chaser_position"].append(result.chaser_position)
         records["explorer_position"].append(result.explorer_position)
 
-        chaser_hidden = chaser_output.hidden
-        explorer_hidden = explorer_output.hidden
+        chaser_hidden = chaser_output.state
+        explorer_hidden = explorer_output.state
         chaser_observation = result.chaser_observation
         explorer_observation = result.explorer_observation
 

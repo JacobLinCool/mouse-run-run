@@ -317,6 +317,265 @@
         background: rgba(180, 35, 24, 0.08);
       }
 
+      .neural {
+        grid-column: 1 / -1;
+      }
+
+      .neural h2 small {
+        color: var(--muted);
+        font-weight: 600;
+      }
+
+      .neural-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        padding: 12px;
+      }
+
+      .neural-cell {
+        display: grid;
+        gap: 6px;
+        min-width: 0;
+        align-content: start;
+      }
+
+      .neural-cell.wide {
+        grid-column: 1 / -1;
+      }
+
+      .neural-cell h3 {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .neural-cell h3 em {
+        float: right;
+        color: var(--muted);
+        font-style: normal;
+        font-weight: 600;
+      }
+
+      .neural-cell canvas {
+        width: 100%;
+        max-width: none;
+        height: auto;
+        aspect-ratio: auto;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+        cursor: crosshair;
+      }
+
+      .neural-cell canvas.pc {
+        cursor: default;
+      }
+
+      .panel.neural h2 {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .legend-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-left: auto;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .legend-chips i {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 4px;
+        border-radius: 3px;
+        vertical-align: -1px;
+      }
+
+      .viridis-bar {
+        display: inline-block;
+        width: 64px;
+        height: 10px;
+        margin-left: 4px;
+        border-radius: 3px;
+        background: linear-gradient(90deg, #440154, #3b528b, #21918c, #5ec962, #fde725);
+        vertical-align: -1px;
+      }
+
+      .neural-duo {
+        display: grid;
+        grid-template-columns: minmax(110px, 150px) 1fr;
+        gap: 10px;
+        align-items: start;
+      }
+
+      .neural-duo figure {
+        display: grid;
+        gap: 4px;
+        margin: 0;
+      }
+
+      .neural-duo figcaption {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+        text-align: center;
+      }
+
+      #snapChaser,
+      #snapExplorer {
+        aspect-ratio: 1;
+        image-rendering: pixelated;
+      }
+
+      .panel.subspace {
+        grid-column: 1 / -1;
+      }
+
+      .panel.subspace h2 {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .subspace-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: end;
+        margin-left: auto;
+      }
+
+      .subspace-controls label {
+        gap: 3px;
+      }
+
+      .subspace-controls input {
+        width: 74px;
+      }
+
+      .subspace-body {
+        display: grid;
+        gap: 14px;
+        padding: 12px;
+      }
+
+      .pipeline {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 8px;
+      }
+
+      .pipeline .step {
+        position: relative;
+        padding: 10px 11px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfbf7;
+      }
+
+      .pipeline .step + .step::before {
+        content: "→";
+        position: absolute;
+        top: 50%;
+        left: -11px;
+        transform: translateY(-50%);
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .pipeline .step span {
+        display: block;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+
+      .pipeline .step strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 17px;
+        line-height: 1.15;
+      }
+
+      .pipeline .step em {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 11px;
+        font-style: normal;
+      }
+
+      .pipeline .step.shared {
+        border-color: rgba(79, 138, 91, 0.5);
+        background: rgba(79, 138, 91, 0.08);
+      }
+
+      .subspace-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr) minmax(0, 1fr);
+        gap: 14px;
+      }
+
+      .subspace-grid .neural-cell canvas {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+      }
+
+      #ccHeatmap {
+        image-rendering: pixelated;
+        aspect-ratio: 1;
+        max-width: 320px;
+        justify-self: center;
+      }
+
+      .split-legend {
+        display: flex;
+        gap: 14px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .split-legend i {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 4px;
+        border-radius: 3px;
+        vertical-align: -1px;
+      }
+
+      .subspace-empty {
+        padding: 22px 12px;
+        color: var(--muted);
+        font-size: 13px;
+        text-align: center;
+      }
+
+      .subspace-warning {
+        padding: 9px 11px;
+        border: 1px solid rgba(196, 134, 43, 0.5);
+        border-radius: 8px;
+        background: rgba(196, 134, 43, 0.08);
+        color: #8a5a12;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
       .message {
         position: fixed;
         right: 16px;
@@ -473,6 +732,100 @@
             <div class="events" id="seedComparison"></div>
           </section>
         </aside>
+
+        <section class="panel neural hidden" id="neuralPanel">
+          <h2>
+            Network Activity
+            <small>&mdash; hidden state h<sub>t</sub> produced action a<sub>t</sub>; click any chart, or use &larr; &rarr; Space</small>
+            <span class="legend-chips">
+              <span><i style="background: var(--chaser)"></i>chaser</span>
+              <span><i style="background: var(--explorer)"></i>explorer</span>
+              <span><i style="background: var(--amber)"></i>partner visible</span>
+              <span>activity 0<span class="viridis-bar"></span>max</span>
+            </span>
+          </h2>
+          <div class="neural-grid">
+            <div class="neural-cell">
+              <h3>Chaser units &times; time <em id="rasterChaserNote"></em></h3>
+              <canvas id="rasterChaser" width="100" height="256"></canvas>
+            </div>
+            <div class="neural-cell">
+              <h3>Explorer units &times; time <em id="rasterExplorerNote"></em></h3>
+              <canvas id="rasterExplorer" width="100" height="256"></canvas>
+            </div>
+            <div class="neural-cell">
+              <h3>Chaser activation now &amp; hidden-state PC1&ndash;PC2 <em id="pcChaserNote"></em></h3>
+              <div class="neural-duo">
+                <figure>
+                  <canvas id="snapChaser" width="16" height="16"></canvas>
+                  <figcaption id="snapChaserCaption">h<sub>t</sub> (peak-sorted)</figcaption>
+                </figure>
+                <canvas id="pcChaser" class="pc" width="640" height="420"></canvas>
+              </div>
+            </div>
+            <div class="neural-cell">
+              <h3>Explorer activation now &amp; hidden-state PC1&ndash;PC2 <em id="pcExplorerNote"></em></h3>
+              <div class="neural-duo">
+                <figure>
+                  <canvas id="snapExplorer" width="16" height="16"></canvas>
+                  <figcaption id="snapExplorerCaption">h<sub>t</sub> (peak-sorted)</figcaption>
+                </figure>
+                <canvas id="pcExplorer" class="pc" width="640" height="420"></canvas>
+              </div>
+            </div>
+            <div class="neural-cell wide">
+              <h3>Value estimate / action-subspace norm / distance</h3>
+              <canvas id="neuralSeries" width="1280" height="352"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel subspace hidden" id="subspacePanel">
+          <h2>
+            Shared &amp; Unique Subspace (PLSC)
+            <small>&mdash; how the paper splits the two networks' activity</small>
+            <span class="subspace-controls">
+              <label>episodes<input id="ssEpisodes" type="number" value="8" min="2" max="64" step="1" /></label>
+              <label>steps<input id="ssSteps" type="number" value="0" min="0" max="1000" step="10" title="0 = checkpoint default" /></label>
+              <label>permutations<input id="ssPerms" type="number" value="100" min="20" max="1000" step="20" /></label>
+              <button class="primary" id="ssCompute">Compute</button>
+            </span>
+          </h2>
+          <div class="subspace-empty" id="subspaceEmpty">
+            Load a checkpoint, then Compute to pool self-play episodes, build the
+            cross-covariance of both agents' hidden states, and split it into the
+            shared subspace (significant PLSC dimensions) and its unique complement.
+          </div>
+          <div class="subspace-body hidden" id="subspaceBody">
+            <div class="subspace-warning hidden" id="ssWarning"></div>
+            <div class="pipeline" id="ssPipeline"></div>
+            <div class="subspace-grid">
+              <div class="neural-cell">
+                <h3>Shared-dimension spectrum vs permutation null</h3>
+                <canvas id="ssSpectrum" width="720" height="380"></canvas>
+              </div>
+              <div class="neural-cell">
+                <h3>Cross-covariance |R| <em id="ccNote"></em></h3>
+                <canvas id="ccHeatmap" width="64" height="64"></canvas>
+              </div>
+              <div class="neural-cell">
+                <h3>Variance split: shared vs unique</h3>
+                <canvas id="ssVariance" width="720" height="380"></canvas>
+                <div class="split-legend">
+                  <span><i style="background: var(--green)"></i>shared subspace</span>
+                  <span><i style="background: var(--line)"></i>unique subspace</span>
+                </div>
+              </div>
+              <div class="neural-cell wide">
+                <h3>
+                  Example pooled episode: activity norm split into shared vs unique over time
+                  <em id="ssExampleNote"></em>
+                </h3>
+                <canvas id="ssExample" width="1280" height="300"></canvas>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -512,7 +865,28 @@
         bindControls();
         await loadCheckpoints();
         drawEmpty();
+        await applyQueryParams();
         tick(0);
+      }
+
+      async function applyQueryParams() {
+        const params = new URLSearchParams(location.search);
+        const fields = [
+          ["checkpoint", checkpointPath],
+          ["seed", seedInput],
+          ["opponent", opponentSelect],
+          ["device", deviceSelect],
+          ["deterministic", deterministicSelect],
+          ["filter_degenerate", filterSelect],
+        ];
+        for (const [key, field] of fields) {
+          if (params.get(key) !== null) field.value = params.get(key);
+        }
+        if (params.get("checkpoint") !== null || params.get("autoload") === "1") {
+          await loadTrajectory();
+          if (params.get("t") !== null) setFrame(Number(params.get("t")));
+          if (params.get("ss") === "1") await computeSubspace();
+        }
       }
 
       function bindControls() {
@@ -525,11 +899,32 @@
           playButton.textContent = playing ? "Pause" : "Play";
           lastAdvance = performance.now();
         });
+        ssCompute.addEventListener("click", computeSubspace);
         timeline.addEventListener("input", () => setFrame(Number(timeline.value)));
         speed.addEventListener("input", () => {
           speedText.textContent = `${Number(speed.value).toFixed(2).replace(/0$/, "")}x`;
         });
         window.addEventListener("resize", draw);
+        window.addEventListener("keydown", (event) => {
+          const tag = document.activeElement?.tagName;
+          if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+          if (event.key === " ") {
+            event.preventDefault();
+            playButton.click();
+          } else if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            setFrame(frameIndex - (event.shiftKey ? 5 : 1));
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            setFrame(frameIndex + (event.shiftKey ? 5 : 1));
+          } else if (event.key === "Home" && trajectory) {
+            event.preventDefault();
+            setFrame(0);
+          } else if (event.key === "End" && trajectory) {
+            event.preventDefault();
+            setFrame(trajectory.frames.length - 1);
+          }
+        });
       }
 
       async function loadCheckpoints() {
@@ -576,6 +971,8 @@
           timeline.value = "0";
           playing = false;
           playButton.textContent = "Play";
+          buildNeural();
+          resetSubspace();
           updateInfo();
           draw();
           clearMessage();
@@ -608,6 +1005,8 @@
         timeline.value = String(frameIndex);
         updateInfo();
         draw();
+        drawNeural();
+        drawSubspaceExample();
       }
 
       function currentFrame() {
@@ -859,6 +1258,862 @@
 
       function getCss(name) {
         return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      }
+
+      // ---- Network activity panel -------------------------------------------------
+      // Neural index t (hidden state that produced action t) aligns with frames[t + 1].
+
+      const neuralPanel = byId("neuralPanel");
+      const neuralCanvases = {
+        rasterChaser: byId("rasterChaser"),
+        rasterExplorer: byId("rasterExplorer"),
+        snapChaser: byId("snapChaser"),
+        snapExplorer: byId("snapExplorer"),
+        pcChaser: byId("pcChaser"),
+        pcExplorer: byId("pcExplorer"),
+        series: byId("neuralSeries"),
+      };
+      const RASTER_AXIS_HEIGHT = 26;
+      let neural = null;
+
+      const VIRIDIS = [
+        [68, 1, 84],
+        [59, 82, 139],
+        [33, 145, 140],
+        [94, 201, 98],
+        [253, 231, 37],
+      ];
+
+      function viridis(value) {
+        const v = Math.max(0, Math.min(1, value)) * (VIRIDIS.length - 1);
+        const low = Math.floor(v);
+        const high = Math.min(VIRIDIS.length - 1, low + 1);
+        const mix = v - low;
+        return [0, 1, 2].map((i) => Math.round(VIRIDIS[low][i] + (VIRIDIS[high][i] - VIRIDIS[low][i]) * mix));
+      }
+
+      function buildNeural() {
+        neural = null;
+        const source = trajectory && trajectory.neural;
+        if (!source || !source.chaser || !source.chaser.hidden?.length) {
+          neuralPanel.classList.add("hidden");
+          return;
+        }
+        neuralPanel.classList.remove("hidden");
+        neural = {
+          chaser: buildAgentNeural(source.chaser),
+          explorer: buildAgentNeural(source.explorer),
+        };
+        byId("rasterChaserNote").textContent = rasterNote(neural.chaser);
+        byId("rasterExplorerNote").textContent = rasterNote(neural.explorer);
+        byId("pcChaserNote").textContent = pcNote(source.chaser);
+        byId("pcExplorerNote").textContent = pcNote(source.explorer);
+        bindNeuralSeek();
+        drawNeural();
+      }
+
+      function rasterNote(view) {
+        return `${view.data.active_units}/${view.units} active, peak-sorted`;
+      }
+
+      function pcNote(data) {
+        const explained = data.pca?.explained;
+        if (!explained || explained.length < 2) return "no variance";
+        return `PC1 ${pct(explained[0])} · PC2 ${pct(explained[1])}`;
+      }
+
+      function buildAgentNeural(data) {
+        const steps = data.hidden.length;
+        const units = data.hidden[0].length;
+        const order = data.unit_order?.length === units ? data.unit_order : [...Array(units).keys()];
+        const unitMax = new Float64Array(units);
+        for (const row of data.hidden) {
+          for (let unit = 0; unit < units; unit += 1) {
+            if (row[unit] > unitMax[unit]) unitMax[unit] = row[unit];
+          }
+        }
+        const raster = document.createElement("canvas");
+        raster.width = steps;
+        raster.height = units;
+        const rasterCtx = raster.getContext("2d");
+        const image = rasterCtx.createImageData(steps, units);
+        for (let rowIndex = 0; rowIndex < units; rowIndex += 1) {
+          const unit = order[rowIndex];
+          const max = unitMax[unit] > 0 ? unitMax[unit] : 1;
+          for (let t = 0; t < steps; t += 1) {
+            const [r, g, b] = viridis(data.hidden[t][unit] / max);
+            const offset = (rowIndex * steps + t) * 4;
+            image.data[offset] = r;
+            image.data[offset + 1] = g;
+            image.data[offset + 2] = b;
+            image.data[offset + 3] = 255;
+          }
+        }
+        rasterCtx.putImageData(image, 0, 0);
+
+        let bounds = null;
+        const coords = data.pca?.coords;
+        if (coords?.length) {
+          bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+          for (const [x, y] of coords) {
+            bounds.minX = Math.min(bounds.minX, x);
+            bounds.maxX = Math.max(bounds.maxX, x);
+            bounds.minY = Math.min(bounds.minY, y);
+            bounds.maxY = Math.max(bounds.maxY, y);
+          }
+          const padX = (bounds.maxX - bounds.minX || 1) * 0.08;
+          const padY = (bounds.maxY - bounds.minY || 1) * 0.08;
+          bounds.minX -= padX;
+          bounds.maxX += padX;
+          bounds.minY -= padY;
+          bounds.maxY += padY;
+        }
+        return { data, steps, units, order, raster, bounds, unitMax };
+      }
+
+      function drawNeural() {
+        if (!neural) return;
+        const stepText = frameIndex >= 1 ? `h[${frameIndex - 1}]` : "h[–]";
+        byId("snapChaserCaption").textContent = `${stepText} (peak-sorted)`;
+        byId("snapExplorerCaption").textContent = `${stepText} (peak-sorted)`;
+        drawRaster(neuralCanvases.rasterChaser, neural.chaser);
+        drawRaster(neuralCanvases.rasterExplorer, neural.explorer);
+        drawSnapshot(neuralCanvases.snapChaser, neural.chaser);
+        drawSnapshot(neuralCanvases.snapExplorer, neural.explorer);
+        drawPcPlot(neuralCanvases.pcChaser, neural.chaser, "chaser");
+        drawPcPlot(neuralCanvases.pcExplorer, neural.explorer, "explorer");
+        drawSeries();
+      }
+
+      function tickStep(total) {
+        if (total > 150) return 50;
+        if (total > 60) return 20;
+        if (total > 25) return 10;
+        return 5;
+      }
+
+      function drawRaster(target, view) {
+        // Aim for a ~1280px-wide canvas so CSS scaling stays near 1:1 and the
+        // axis text keeps its intended size.
+        const scale = Math.max(1, Math.round(1280 / view.steps));
+        target.width = view.steps * scale;
+        target.height = view.units + RASTER_AXIS_HEIGHT;
+        const context = target.getContext("2d");
+        context.imageSmoothingEnabled = false;
+        context.drawImage(view.raster, 0, 0, target.width, view.units);
+        // Time axis.
+        context.fillStyle = "#fff";
+        context.fillRect(0, view.units, target.width, RASTER_AXIS_HEIGHT);
+        context.strokeStyle = getCss("--line");
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(0, view.units + 0.5);
+        context.lineTo(target.width, view.units + 0.5);
+        context.stroke();
+        context.fillStyle = getCss("--muted");
+        context.font = "600 12px system-ui";
+        context.textAlign = "center";
+        const step = tickStep(view.steps);
+        for (let t = 0; t <= view.steps; t += step) {
+          const x = Math.min(t, view.steps - 1) * scale + scale / 2;
+          context.beginPath();
+          context.moveTo(x, view.units);
+          context.lineTo(x, view.units + 5);
+          context.stroke();
+          context.fillText(String(t), x, view.units + 18);
+        }
+        // Playback cursor: raster column t is neural step t = frame t + 1.
+        const cursor = frameIndex - 1;
+        if (cursor >= 0 && cursor < view.steps) {
+          context.fillStyle = "rgba(255, 255, 255, 0.35)";
+          context.fillRect(cursor * scale, 0, scale, view.units);
+          context.strokeStyle = "#ffffff";
+          context.lineWidth = 1;
+          context.strokeRect(cursor * scale + 0.5, 0.5, scale - 1, view.units - 1);
+        }
+      }
+
+      function drawSnapshot(target, view) {
+        const side = Math.ceil(Math.sqrt(view.units));
+        target.width = side;
+        target.height = side;
+        const context = target.getContext("2d");
+        const cursor = frameIndex - 1;
+        if (cursor < 0 || cursor >= view.steps) {
+          context.fillStyle = "#ecefe9";
+          context.fillRect(0, 0, side, side);
+          return;
+        }
+        const image = context.createImageData(side, side);
+        const row = view.data.hidden[cursor];
+        for (let cell = 0; cell < side * side; cell += 1) {
+          const offset = cell * 4;
+          if (cell >= view.units) {
+            image.data[offset + 3] = 0;
+            continue;
+          }
+          const unit = view.order[cell];
+          const max = view.unitMax[unit] > 0 ? view.unitMax[unit] : 1;
+          const [r, g, b] = viridis(row[unit] / max);
+          image.data[offset] = r;
+          image.data[offset + 1] = g;
+          image.data[offset + 2] = b;
+          image.data[offset + 3] = 255;
+        }
+        context.putImageData(image, 0, 0);
+      }
+
+      function drawPcPlot(target, view, agent) {
+        const context = target.getContext("2d");
+        const { width, height } = target;
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = "#fff";
+        context.fillRect(0, 0, width, height);
+        const coords = view.data.pca?.coords;
+        if (!coords?.length || !view.bounds) {
+          context.fillStyle = getCss("--muted");
+          context.font = "600 18px system-ui";
+          context.textAlign = "center";
+          context.fillText("no PCA (constant hidden state)", width / 2, height / 2);
+          return;
+        }
+        const pad = 16;
+        // Equal aspect: one PC unit spans the same pixels on both axes, so
+        // hidden-state step sizes are not distorted.
+        const rangeX = view.bounds.maxX - view.bounds.minX;
+        const rangeY = view.bounds.maxY - view.bounds.minY;
+        const unit = Math.min((width - pad * 2) / rangeX, (height - pad * 2) / rangeY);
+        const offsetX = (width - unit * rangeX) / 2;
+        const offsetY = (height - unit * rangeY) / 2;
+        const toX = (x) => offsetX + (x - view.bounds.minX) * unit;
+        const toY = (y) => height - offsetY - (y - view.bounds.minY) * unit;
+        const color = getCss(`--${agent}`);
+        const cursor = Math.max(0, Math.min(frameIndex - 1, coords.length - 1));
+
+        // Origin crosshair: the mean hidden state sits at (0, 0).
+        context.strokeStyle = "rgba(32, 36, 38, 0.08)";
+        context.lineWidth = 1;
+        if (view.bounds.minX < 0 && view.bounds.maxX > 0) {
+          context.beginPath();
+          context.moveTo(toX(0), 0);
+          context.lineTo(toX(0), height);
+          context.stroke();
+        }
+        if (view.bounds.minY < 0 && view.bounds.maxY > 0) {
+          context.beginPath();
+          context.moveTo(0, toY(0));
+          context.lineTo(width, toY(0));
+          context.stroke();
+        }
+
+        context.strokeStyle = "rgba(32, 36, 38, 0.14)";
+        context.lineWidth = 1.5;
+        context.beginPath();
+        coords.forEach(([x, y], index) => {
+          if (index === 0) context.moveTo(toX(x), toY(y));
+          else context.lineTo(toX(x), toY(y));
+        });
+        context.stroke();
+
+        // Trail up to the playback cursor, fading in with time.
+        for (let index = 1; index <= cursor; index += 1) {
+          const alpha = 0.15 + 0.85 * (index / Math.max(1, cursor));
+          context.strokeStyle = withAlpha(color, alpha);
+          context.lineWidth = 2.5;
+          context.beginPath();
+          context.moveTo(toX(coords[index - 1][0]), toY(coords[index - 1][1]));
+          context.lineTo(toX(coords[index][0]), toY(coords[index][1]));
+          context.stroke();
+        }
+
+        // Partner-visible steps get a small amber dot on the trail.
+        for (let index = 0; frameIndex >= 1 && index <= cursor; index += 1) {
+          const frame = trajectory.frames[index + 1];
+          if (!frame || !frame[`${agent}_partner_visible`]) continue;
+          context.fillStyle = "rgba(196, 134, 43, 0.85)";
+          context.beginPath();
+          context.arc(toX(coords[index][0]), toY(coords[index][1]), 2.8, 0, Math.PI * 2);
+          context.fill();
+        }
+
+        // Episode start marker.
+        context.strokeStyle = withAlpha(color, 0.7);
+        context.lineWidth = 1.5;
+        context.beginPath();
+        context.arc(toX(coords[0][0]), toY(coords[0][1]), 4, 0, Math.PI * 2);
+        context.stroke();
+
+        if (frameIndex >= 1) {
+          context.fillStyle = color;
+          context.beginPath();
+          context.arc(toX(coords[cursor][0]), toY(coords[cursor][1]), 6, 0, Math.PI * 2);
+          context.fill();
+          context.strokeStyle = "#fff";
+          context.lineWidth = 2;
+          context.stroke();
+        }
+
+        context.fillStyle = getCss("--muted");
+        context.font = "600 13px system-ui";
+        context.textAlign = "left";
+        context.fillText("PC1 →", pad, height - 6);
+        context.save();
+        context.translate(14, height - pad);
+        context.rotate(-Math.PI / 2);
+        context.fillText("PC2 →", 0, 0);
+        context.restore();
+      }
+
+      function drawSeries() {
+        const target = neuralCanvases.series;
+        const context = target.getContext("2d");
+        const { width, height } = target;
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = "#fff";
+        context.fillRect(0, 0, width, height);
+        const frames = trajectory.frames;
+        const total = frames.length - 1;
+        if (total < 1) return;
+        const chaserColor = getCss("--chaser");
+        const explorerColor = getCss("--explorer");
+        const frame = currentFrame();
+        const cursorNeural = frameIndex - 1;
+        const pair = (chaserValue, explorerValue) =>
+          `C ${fmtOrDash(chaserValue)} · E ${fmtOrDash(explorerValue)}`;
+        const lanes = [
+          {
+            label: "value estimate",
+            readout: pair(
+              neural.chaser.data.value[cursorNeural],
+              neural.explorer.data.value[cursorNeural],
+            ),
+            series: [
+              { color: chaserColor, points: seriesPoints(neural.chaser.data.value, 1) },
+              { color: explorerColor, points: seriesPoints(neural.explorer.data.value, 1) },
+            ],
+          },
+          {
+            label: "action-subspace norm",
+            readout:
+              frameIndex >= 1
+                ? pair(frame?.subspace_norm?.chaser, frame?.subspace_norm?.explorer)
+                : pair(undefined, undefined),
+            series: [
+              { color: chaserColor, points: framePoints((item) => item.subspace_norm?.chaser, 1) },
+              { color: explorerColor, points: framePoints((item) => item.subspace_norm?.explorer, 1) },
+            ],
+          },
+          {
+            label: "distance",
+            readout: fmtOrDash(frame?.distance),
+            series: [{ color: getCss("--amber"), points: framePoints((item) => item.distance, 0) }],
+          },
+        ];
+        const padLeft = 56;
+        const padRight = 10;
+        const laneGap = 22;
+        const axisHeight = 22;
+        const laneHeight = (height - axisHeight - laneGap * lanes.length) / lanes.length;
+        const toT = (t) => padLeft + (t / total) * (width - padLeft - padRight);
+        const step = tickStep(total);
+
+        // Shared vertical gridlines and bottom time axis.
+        context.strokeStyle = "rgba(32, 36, 38, 0.06)";
+        context.lineWidth = 1;
+        context.fillStyle = getCss("--muted");
+        context.font = "600 12px system-ui";
+        context.textAlign = "center";
+        for (let t = 0; t <= total; t += step) {
+          context.beginPath();
+          context.moveTo(toT(t), laneGap * 0.6);
+          context.lineTo(toT(t), height - axisHeight);
+          context.stroke();
+          context.fillText(String(t), toT(t), height - 6);
+        }
+        context.fillText("timestep", padLeft / 2, height - 6);
+
+        lanes.forEach((lane, laneIndex) => {
+          const top = laneGap * 0.6 + laneIndex * (laneHeight + laneGap);
+          drawLane(context, lane, top, laneHeight, toT, total);
+        });
+        // Shared playback cursor.
+        context.strokeStyle = "rgba(32, 36, 38, 0.55)";
+        context.lineWidth = 1.5;
+        context.beginPath();
+        context.moveTo(toT(frameIndex), 2);
+        context.lineTo(toT(frameIndex), height - axisHeight);
+        context.stroke();
+      }
+
+      function fmtOrDash(value) {
+        return Number.isFinite(value) ? fmt.format(value) : "–";
+      }
+
+      function drawLane(context, lane, top, laneHeight, toT, total) {
+        let min = Infinity;
+        let max = -Infinity;
+        for (const series of lane.series) {
+          for (const point of series.points) {
+            min = Math.min(min, point.v);
+            max = Math.max(max, point.v);
+          }
+        }
+        if (!Number.isFinite(min)) return;
+        if (max - min < 1e-9) {
+          max += 0.5;
+          min -= 0.5;
+        }
+        const toY = (v) => top + laneHeight - ((v - min) / (max - min)) * laneHeight;
+        context.strokeStyle = "rgba(32, 36, 38, 0.10)";
+        context.lineWidth = 1;
+        context.strokeRect(toT(0), top, toT(total) - toT(0), laneHeight);
+        for (const series of lane.series) {
+          context.strokeStyle = series.color;
+          context.lineWidth = 2;
+          context.beginPath();
+          series.points.forEach((point, index) => {
+            if (index === 0) context.moveTo(toT(point.t), toY(point.v));
+            else context.lineTo(toT(point.t), toY(point.v));
+          });
+          context.stroke();
+        }
+        context.fillStyle = getCss("--muted");
+        context.font = "600 12px system-ui";
+        context.textAlign = "left";
+        context.fillText(lane.label, toT(0) + 6, top + 13);
+        if (lane.readout) {
+          context.textAlign = "right";
+          context.fillText(lane.readout, toT(total) - 6, top + 13);
+        }
+        context.textAlign = "right";
+        context.fillText(fmt.format(max), toT(0) - 6, top + 10);
+        context.fillText(fmt.format(min), toT(0) - 6, top + laneHeight);
+      }
+
+      function seriesPoints(values, offset) {
+        return (values || []).map((v, index) => ({ t: index + offset, v })).filter((p) => Number.isFinite(p.v));
+      }
+
+      function framePoints(pick, startFrame) {
+        const points = [];
+        for (let t = startFrame; t < trajectory.frames.length; t += 1) {
+          const value = pick(trajectory.frames[t]);
+          if (Number.isFinite(value)) points.push({ t, v: value });
+        }
+        return points;
+      }
+
+      const rgbCache = new Map();
+
+      function withAlpha(cssColor, alpha) {
+        if (!rgbCache.has(cssColor)) {
+          const probe = document.createElement("canvas").getContext("2d");
+          probe.fillStyle = cssColor;
+          const parsed = probe.fillStyle;
+          let rgb = [32, 36, 38];
+          if (parsed.startsWith("#")) {
+            rgb = [parsed.slice(1, 3), parsed.slice(3, 5), parsed.slice(5, 7)].map((hex) => parseInt(hex, 16));
+          }
+          rgbCache.set(cssColor, rgb);
+        }
+        const [r, g, b] = rgbCache.get(cssColor);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      }
+
+      let neuralSeekBound = false;
+
+      function bindNeuralSeek() {
+        if (neuralSeekBound) return;
+        neuralSeekBound = true;
+        const seek = (target, toFrame) => {
+          const handler = (event) => {
+            if (event.type === "pointermove" && event.buttons !== 1) return;
+            const rect = target.getBoundingClientRect();
+            const x = ((event.clientX - rect.left) / rect.width) * target.width;
+            setFrame(toFrame(x, target));
+          };
+          target.addEventListener("pointerdown", handler);
+          target.addEventListener("pointermove", handler);
+        };
+        seek(neuralCanvases.rasterChaser, (x, target) => {
+          const scale = target.width / neural.chaser.steps;
+          return Math.floor(x / scale) + 1;
+        });
+        seek(neuralCanvases.rasterExplorer, (x, target) => {
+          const scale = target.width / neural.explorer.steps;
+          return Math.floor(x / scale) + 1;
+        });
+        seek(neuralCanvases.series, (x, target) => {
+          const padLeft = 56;
+          const padRight = 10;
+          const total = trajectory.frames.length - 1;
+          return Math.round(((x - padLeft) / (target.width - padLeft - padRight)) * total);
+        });
+      }
+
+      // ---- Shared / unique subspace panel (PLSC) ---------------------------------
+
+      const subspacePanel = byId("subspacePanel");
+      const subspaceEmpty = byId("subspaceEmpty");
+      const subspaceBody = byId("subspaceBody");
+      const ssCompute = byId("ssCompute");
+      let subspace = null;
+
+      function resetSubspace() {
+        subspace = null;
+        subspacePanel.classList.remove("hidden");
+        subspaceBody.classList.add("hidden");
+        subspaceEmpty.classList.remove("hidden");
+        subspaceEmpty.textContent =
+          "Compute to pool self-play episodes, build the cross-covariance of both" +
+          " agents' hidden states, and split it into the shared subspace" +
+          " (significant PLSC dimensions) and its unique complement.";
+      }
+
+      async function computeSubspace() {
+        if (!checkpointPath.value) {
+          throwMessage("Select a checkpoint");
+          return;
+        }
+        ssCompute.disabled = true;
+        subspaceEmpty.classList.remove("hidden");
+        subspaceBody.classList.add("hidden");
+        subspaceEmpty.textContent = "Pooling episodes, running PLSC and the permutation null…";
+        try {
+          const params = new URLSearchParams({
+            checkpoint: checkpointPath.value,
+            device: deviceSelect.value,
+            episodes: byId("ssEpisodes").value || "8",
+            max_steps: byId("ssSteps").value || "0",
+            permutations: byId("ssPerms").value || "100",
+          });
+          const response = await fetch(`/api/shared_subspace?${params.toString()}`);
+          const data = await response.json();
+          if (!response.ok || data.error) throw new Error(data.message || "PLSC failed");
+          subspace = data;
+          subspaceEmpty.classList.add("hidden");
+          subspaceBody.classList.remove("hidden");
+          renderSubspace();
+        } catch (error) {
+          subspaceEmpty.textContent = error.message;
+        } finally {
+          ssCompute.disabled = false;
+        }
+      }
+
+      function renderSubspace() {
+        if (!subspace) return;
+        const warning = byId("ssWarning");
+        const messages = subspace.warnings || [];
+        if (messages.length) {
+          warning.textContent = `⚠ ${messages.join(" ")}`;
+          warning.classList.remove("hidden");
+        } else {
+          warning.classList.add("hidden");
+        }
+        renderPipeline();
+        drawCrossCovariance();
+        drawSpectrum();
+        drawVarianceSplit();
+        const example = subspace.example_episode;
+        byId("ssExampleNote").textContent =
+          `${subspace.pool.episodes_used} pooled episodes, degenerate excluded; showing episode 0`;
+        byId("ccNote").textContent = `${subspace.cross_covariance.source_size}² → ${subspace.cross_covariance.size}²`;
+        drawSubspaceExample();
+      }
+
+      function renderPipeline() {
+        const root = byId("ssPipeline");
+        const pool = subspace.pool;
+        const hidden = subspace.params.hidden_size;
+        const steps = [
+          {
+            label: "1 · Pool activity",
+            value: `${pool.samples.toLocaleString()} × ${hidden}`,
+            note: `${pool.episodes_used} ep × ${pool.steps} steps · ${pool.excluded_degenerate} degenerate excluded`,
+          },
+          {
+            label: "2 · Cross-covariance",
+            value: `R = Xᶜᵀ Xᵉ ⁄ (n−1)`,
+            note: `${hidden} × ${hidden}, z-scored units`,
+          },
+          {
+            label: "3 · SVD + null",
+            value: `${subspace.params.permutations}× permute`,
+            note: `temporal shuffle, α = ${subspace.params.alpha}`,
+          },
+          {
+            label: "4 · Shared subspace",
+            value: `${subspace.significant_dims} dims`,
+            note: `top-dim r = ${subspace.top_dim_correlation}`,
+            shared: true,
+          },
+          {
+            label: "5 · Unique subspace",
+            value: `${subspace.unique_dims} dims`,
+            note: `orthogonal complement`,
+          },
+        ];
+        root.innerHTML = "";
+        for (const step of steps) {
+          const node = document.createElement("div");
+          node.className = `step${step.shared ? " shared" : ""}`;
+          node.innerHTML = `<span>${step.label}</span><strong>${step.value}</strong><em>${step.note}</em>`;
+          root.append(node);
+        }
+      }
+
+      function drawCrossCovariance() {
+        const target = byId("ccHeatmap");
+        const grid = subspace.cross_covariance;
+        const size = grid.size;
+        target.width = size;
+        target.height = size;
+        const context = target.getContext("2d");
+        const image = context.createImageData(size, size);
+        const max = grid.max_abs > 0 ? grid.max_abs : 1;
+        for (let row = 0; row < size; row += 1) {
+          for (let col = 0; col < size; col += 1) {
+            const [r, g, b] = viridis(grid.values[row][col] / max);
+            const offset = (row * size + col) * 4;
+            image.data[offset] = r;
+            image.data[offset + 1] = g;
+            image.data[offset + 2] = b;
+            image.data[offset + 3] = 255;
+          }
+        }
+        context.putImageData(image, 0, 0);
+      }
+
+      function drawSpectrum() {
+        const target = byId("ssSpectrum");
+        const context = target.getContext("2d");
+        const { width, height } = target;
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = "#fff";
+        context.fillRect(0, 0, width, height);
+        const observed = subspace.singular_values;
+        const nullHigh = subspace.null_p95;
+        const nullLow = subspace.null_low;
+        const count = observed.length;
+        const padLeft = 46;
+        const padRight = 12;
+        const padTop = 14;
+        const padBottom = 30;
+        const max = Math.max(...observed, ...nullHigh) * 1.05;
+        const toX = (i) => padLeft + (i / Math.max(1, count - 1)) * (width - padLeft - padRight);
+        const toY = (v) => height - padBottom - (v / max) * (height - padTop - padBottom);
+
+        // Null band.
+        context.fillStyle = "rgba(105, 113, 119, 0.18)";
+        context.beginPath();
+        for (let i = 0; i < count; i += 1) {
+          const x = toX(i);
+          const y = toY(nullHigh[i]);
+          i === 0 ? context.moveTo(x, y) : context.lineTo(x, y);
+        }
+        for (let i = count - 1; i >= 0; i -= 1) context.lineTo(toX(i), toY(nullLow[i]));
+        context.closePath();
+        context.fill();
+
+        // Shared / unique split marker at the boundary.
+        const boundary = subspace.significant_dims;
+        if (boundary > 0 && boundary <= count) {
+          const x = toX(Math.min(boundary, count) - 0.5);
+          context.fillStyle = "rgba(79, 138, 91, 0.08)";
+          context.fillRect(padLeft, padTop, x - padLeft, height - padTop - padBottom);
+          context.strokeStyle = "rgba(79, 138, 91, 0.65)";
+          context.lineWidth = 1.5;
+          context.setLineDash([5, 4]);
+          context.beginPath();
+          context.moveTo(x, padTop);
+          context.lineTo(x, height - padBottom);
+          context.stroke();
+          context.setLineDash([]);
+          context.fillStyle = getCss("--green");
+          context.font = "700 11px system-ui";
+          context.textAlign = "left";
+          context.fillText(`${boundary} shared`, padLeft + 4, padTop + 12);
+        }
+
+        // Observed singular values.
+        context.strokeStyle = getCss(`--${subspace.task === "non_social" ? "explorer" : "chaser"}`);
+        context.lineWidth = 2;
+        context.beginPath();
+        observed.forEach((value, i) => {
+          const x = toX(i);
+          const y = toY(value);
+          i === 0 ? context.moveTo(x, y) : context.lineTo(x, y);
+        });
+        context.stroke();
+        context.fillStyle = context.strokeStyle;
+        observed.forEach((value, i) => {
+          context.beginPath();
+          context.arc(toX(i), toY(value), 2.5, 0, Math.PI * 2);
+          context.fill();
+        });
+
+        axisLabels(context, width, height, padLeft, padBottom, "shared dimension", "singular value", max);
+      }
+
+      function drawVarianceSplit() {
+        const target = byId("ssVariance");
+        const context = target.getContext("2d");
+        const { width, height } = target;
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = "#fff";
+        context.fillRect(0, 0, width, height);
+        const agents = [
+          { name: "chaser", data: subspace.variance.chaser },
+          { name: "explorer", data: subspace.variance.explorer },
+        ];
+        const padTop = 24;
+        const padBottom = 30;
+        const barWidth = 120;
+        const gap = (width - barWidth * agents.length) / (agents.length + 1);
+        const barHeight = height - padTop - padBottom;
+        agents.forEach((agent, index) => {
+          const x = gap + index * (barWidth + gap);
+          const sharedHeight = barHeight * agent.data.shared;
+          context.fillStyle = getCss("--green");
+          context.fillRect(x, padTop + (barHeight - sharedHeight), barWidth, sharedHeight);
+          context.fillStyle = "#ecefe9";
+          context.fillRect(x, padTop, barWidth, barHeight - sharedHeight);
+          context.strokeStyle = getCss("--line");
+          context.strokeRect(x, padTop, barWidth, barHeight);
+
+          context.fillStyle = "#fff";
+          context.font = "700 13px system-ui";
+          context.textAlign = "center";
+          if (sharedHeight > 22) {
+            context.fillText(pct(agent.data.shared), x + barWidth / 2, padTop + (barHeight - sharedHeight) + 16);
+          }
+          context.fillStyle = getCss("--muted");
+          context.textAlign = "center";
+          context.fillText(agent.name, x + barWidth / 2, height - 10);
+          context.fillStyle = getCss("--ink");
+          context.font = "600 12px system-ui";
+          context.fillText(`shared ${pct(agent.data.shared)}`, x + barWidth / 2, padTop - 8);
+        });
+      }
+
+      function drawSubspaceExample() {
+        if (!subspace) return;
+        const target = byId("ssExample");
+        const context = target.getContext("2d");
+        const { width, height } = target;
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = "#fff";
+        context.fillRect(0, 0, width, height);
+        const example = subspace.example_episode;
+        const total = example.steps;
+        if (total < 1) return;
+        const lanes = [
+          { name: "chaser", color: getCss("--chaser"), data: example.chaser },
+          { name: "explorer", color: getCss("--explorer"), data: example.explorer },
+        ];
+        const padLeft = 52;
+        const padRight = 12;
+        const laneGap = 20;
+        const axisHeight = 22;
+        const laneHeight = (height - axisHeight - laneGap * lanes.length) / lanes.length;
+        const toT = (t) => padLeft + (t / Math.max(1, total - 1)) * (width - padLeft - padRight);
+        const step = tickStep(total);
+
+        context.strokeStyle = "rgba(32, 36, 38, 0.06)";
+        context.fillStyle = getCss("--muted");
+        context.font = "600 12px system-ui";
+        context.textAlign = "center";
+        for (let t = 0; t <= total - 1; t += step) {
+          context.beginPath();
+          context.moveTo(toT(t), laneGap * 0.5);
+          context.lineTo(toT(t), height - axisHeight);
+          context.stroke();
+          context.fillText(String(t), toT(t), height - 6);
+        }
+        context.fillText("timestep (pooled episode 0)", padLeft + 40, height - 6);
+
+        lanes.forEach((lane, index) => {
+          const top = laneGap * 0.5 + index * (laneHeight + laneGap);
+          drawSplitLane(context, lane, top, laneHeight, toT, total);
+        });
+
+        // Playback cursor from the main timeline (episodes share the step index).
+        const cursorStep = frameIndex - 1;
+        if (cursorStep >= 0 && cursorStep < total) {
+          context.strokeStyle = "rgba(32, 36, 38, 0.5)";
+          context.lineWidth = 1.5;
+          context.beginPath();
+          context.moveTo(toT(cursorStep), 2);
+          context.lineTo(toT(cursorStep), height - axisHeight);
+          context.stroke();
+        }
+      }
+
+      function drawSplitLane(context, lane, top, laneHeight, toT, total) {
+        const shared = lane.data.shared_norm;
+        const unique = lane.data.unique_norm;
+        // Total norm = sqrt(shared^2 + unique^2); stack the two as a filled area.
+        const totals = shared.map((s, i) => Math.hypot(s, unique[i]));
+        const max = Math.max(...totals, 1e-6);
+        const toY = (v) => top + laneHeight - (v / max) * laneHeight;
+        const cursorStep = frameIndex - 1;
+
+        // Unique (full total area, light) then shared (green, from baseline).
+        fillArea(context, totals, toT, toY, top + laneHeight, "rgba(217, 221, 216, 0.7)");
+        fillArea(context, shared, toT, toY, top + laneHeight, "rgba(79, 138, 91, 0.55)");
+        context.strokeStyle = lane.color;
+        context.lineWidth = 1.5;
+        context.beginPath();
+        totals.forEach((v, i) => {
+          const x = toT(i);
+          const y = toY(v);
+          i === 0 ? context.moveTo(x, y) : context.lineTo(x, y);
+        });
+        context.stroke();
+
+        context.fillStyle = getCss("--muted");
+        context.font = "600 12px system-ui";
+        context.textAlign = "left";
+        context.fillText(`${lane.name}: ‖h‖ = shared ⊕ unique`, toT(0) + 6, top + 13);
+        if (cursorStep >= 0 && cursorStep < shared.length) {
+          const s = shared[cursorStep];
+          const u = unique[cursorStep];
+          const frac = s / Math.max(1e-6, Math.hypot(s, u));
+          context.textAlign = "right";
+          context.fillStyle = getCss("--ink");
+          context.fillText(
+            `shared ${s.toFixed(2)} · unique ${u.toFixed(2)} · ${pct(frac)} shared`,
+            toT(total - 1) - 4,
+            top + 13,
+          );
+        }
+      }
+
+      function fillArea(context, values, toT, toY, baseline, color) {
+        context.fillStyle = color;
+        context.beginPath();
+        context.moveTo(toT(0), baseline);
+        values.forEach((v, i) => context.lineTo(toT(i), toY(v)));
+        context.lineTo(toT(values.length - 1), baseline);
+        context.closePath();
+        context.fill();
+      }
+
+      function axisLabels(context, width, height, padLeft, padBottom, xLabel, yLabel, max) {
+        context.fillStyle = getCss("--muted");
+        context.font = "600 12px system-ui";
+        context.textAlign = "center";
+        context.fillText(xLabel, width / 2, height - 6);
+        context.textAlign = "right";
+        context.fillText(fmt.format(max), padLeft - 6, 14);
+        context.fillText("0", padLeft - 6, height - padBottom);
+        context.save();
+        context.translate(12, height / 2);
+        context.rotate(-Math.PI / 2);
+        context.textAlign = "center";
+        context.fillText(yLabel, 0, 0);
+        context.restore();
       }
 
       boot().catch((error) => throwMessage(error.message));
