@@ -357,3 +357,170 @@ def replay_cka(
     recorded_flat = recorded.reshape(-1, recorded.shape[-1]).double().numpy()
     replayed_flat = replayed.reshape(-1, replayed.shape[-1]).double().numpy()
     return linear_cka(recorded_flat, replayed_flat)
+
+
+# ---------------------------------------------------------------------------
+# C4: partner representation in the neural action subspace
+# ---------------------------------------------------------------------------
+
+
+def neural_action_subspace(hidden: np.ndarray, action_weight: np.ndarray) -> np.ndarray:
+    """z_t = W_action^T W_action h_t : the action-relevant projection of the
+    hidden state (rank <= number of actions). ``hidden`` is (n, H),
+    ``action_weight`` is (A, H)."""
+    gram = action_weight.T @ action_weight
+    return hidden @ gram.T
+
+
+def _behavior_predictors(
+    tensors: dict[str, torch.Tensor],
+    indices: list[int],
+    grid_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Design matrix and a boolean mask of the partner-behaviour columns.
+
+    Focal agent is the chaser; the partner is the explorer. Self columns:
+    collision, self x/y, self action (one-hot), self approach/new-field.
+    Partner columns: partner x/y, partner action (one-hot), partner
+    escape/new-field. All at the pre-action state s_t.
+    """
+    steps = tensors["chaser_hidden"].shape[0]
+
+    def per_step(key: str) -> np.ndarray:
+        return tensors[key][:steps, indices].numpy().reshape(-1)
+
+    def onehot(actions: np.ndarray) -> np.ndarray:
+        oh = np.zeros((actions.shape[0], 4), dtype=np.float64)
+        valid = actions >= 0
+        oh[np.arange(actions.shape[0])[valid], actions[valid]] = 1.0
+        return oh
+
+    chaser_pos = tensors["chaser_position"][:steps, indices].numpy().reshape(-1, 2) / (grid_size - 1)
+    explorer_pos = tensors["explorer_position"][:steps, indices].numpy().reshape(-1, 2) / (grid_size - 1)
+    chaser_act = onehot(tensors["chaser_action"][:, indices].numpy().reshape(-1))
+    explorer_act = onehot(tensors["explorer_action"][:, indices].numpy().reshape(-1))
+
+    self_cols = [
+        per_step("collision").astype(np.float64)[:, None],
+        chaser_pos,
+        chaser_act,
+        per_step("chaser_approach").astype(np.float64)[:, None],
+        per_step("chaser_new_field").astype(np.float64)[:, None],
+    ]
+    partner_cols = [
+        explorer_pos,
+        explorer_act,
+        per_step("explorer_escape").astype(np.float64)[:, None],
+        per_step("explorer_new_field").astype(np.float64)[:, None],
+    ]
+    self_block = np.concatenate(self_cols, axis=1)
+    partner_block = np.concatenate(partner_cols, axis=1)
+    design = np.concatenate([self_block, partner_block], axis=1)
+    is_partner = np.zeros(design.shape[1], dtype=bool)
+    is_partner[self_block.shape[1]:] = True
+    return design, is_partner
+
+
+def _multivariate_r2(x: np.ndarray, y: np.ndarray) -> float:
+    """Total variance of y explained by a least-squares linear fit on x
+    (x includes no intercept column; one is added)."""
+    x = np.concatenate([x, np.ones((x.shape[0], 1))], axis=1)
+    beta, _, _, _ = np.linalg.lstsq(x, y, rcond=None)
+    resid = y - x @ beta
+    ss_res = float((resid ** 2).sum())
+    ss_tot = float(((y - y.mean(axis=0)) ** 2).sum())
+    return 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
+
+
+@dataclass(frozen=True)
+class PartnerRepresentation:
+    r2_full: float
+    r2_without_partner: float
+    partner_unique: float
+    n_samples: int
+    n_valid_episodes: int
+
+
+def partner_representation(
+    tensors: dict[str, torch.Tensor],
+    action_weight: np.ndarray,
+    *,
+    grid_size: int = 10,
+    seed: int = 0,
+) -> PartnerRepresentation:
+    """Non-redundant variance of the chaser's neural action subspace explained
+    by the partner's behaviour (paper C4).
+
+    Fits z ~ [self + partner] and z ~ [self + permuted-partner]; the drop in
+    total R^2 is the unique partner contribution.
+    """
+    indices = valid_episode_indices(tensors)
+    if len(indices) < 2:
+        return PartnerRepresentation(0.0, 0.0, 0.0, 0, len(indices))
+    hidden = tensors["chaser_hidden"][:, indices].double().numpy().reshape(-1, tensors["chaser_hidden"].shape[-1])
+    z = neural_action_subspace(hidden, action_weight)
+    z = z - z.mean(axis=0)
+    design, is_partner = _behavior_predictors(tensors, indices, grid_size)
+
+    r2_full = _multivariate_r2(design, z)
+    rng = np.random.RandomState(seed)
+    permuted = design.copy()
+    order = rng.permutation(permuted.shape[0])
+    permuted[:, is_partner] = permuted[order][:, is_partner]
+    r2_reduced = _multivariate_r2(permuted, z)
+    return PartnerRepresentation(
+        r2_full=r2_full,
+        r2_without_partner=r2_reduced,
+        partner_unique=max(r2_full - r2_reduced, 0.0),
+        n_samples=z.shape[0],
+        n_valid_episodes=len(indices),
+    )
+
+
+def chaser_action_weight(checkpoint: Path) -> np.ndarray:
+    """The chaser's action-layer weight (A, H) from a checkpoint."""
+    _, _, chaser_state, _ = load_checkpoint(checkpoint)
+    return chaser_state["action_layer.weight"].double().numpy()
+
+
+# ---------------------------------------------------------------------------
+# C5: top-k shared-dimension null-space perturbation basis
+# ---------------------------------------------------------------------------
+
+
+def shared_dimension_basis(
+    tensors: dict[str, torch.Tensor],
+    *,
+    top_k: int = 10,
+) -> np.ndarray:
+    """Chaser-side top-k PLSC directions (H, k), orthonormalized, for the
+    null-space perturbation. Built from the cross-covariance of the two
+    agents' z-scored hidden states over non-degenerate episodes."""
+    chaser_episodes, explorer_episodes = episode_hidden_pairs(tensors)
+    X = _zscore(np.concatenate(chaser_episodes))
+    Y = _zscore(np.concatenate(explorer_episodes))
+    cross = X.T @ Y / (X.shape[0] - 1)
+    U, _, _ = np.linalg.svd(cross)
+    basis = U[:, :top_k]
+    q, _ = np.linalg.qr(basis)
+    return q
+
+
+def random_variance_basis(
+    tensors: dict[str, torch.Tensor],
+    *,
+    top_k: int = 25,
+    seed: int = 0,
+) -> np.ndarray:
+    """Control basis (H, k): top-k PCs of temporally permuted chaser activity,
+    matching a comparable amount of removed variance without the shared
+    structure (paper C5 control)."""
+    chaser_episodes, _ = episode_hidden_pairs(tensors)
+    X = _zscore(np.concatenate(chaser_episodes))
+    rng = np.random.RandomState(seed)
+    permuted = X[rng.permutation(X.shape[0])]
+    cov = permuted.T @ permuted / (permuted.shape[0] - 1)
+    values, vectors = np.linalg.eigh(cov)
+    basis = vectors[:, ::-1][:, :top_k]
+    q, _ = np.linalg.qr(basis)
+    return q
