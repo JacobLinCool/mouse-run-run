@@ -301,11 +301,55 @@ def build_report(runs_root: Path, project_root: Path) -> dict[str, object]:
     if report_path.exists():
         report_md = report_path.read_text(encoding="utf-8")
 
+    alignment_md = None
+    alignment_path = project_root / "docs" / "paper-notes" / "paper-claim-alignment.md"
+    if alignment_path.exists():
+        alignment_md = alignment_path.read_text(encoding="utf-8")
+
     return {
         "experiments": experiments,
         "cross_architecture": cross,
         "figures": figures,
         "report_markdown": report_md,
+        "claim_alignment": _claim_alignment(analyses_root),
+        "alignment_markdown": alignment_md,
+    }
+
+
+CLAIM_ALIGNMENT = [
+    ("C1", "Social rewards produce social behavior", "reproduces",
+     "Social agents learn chase/flee; non-social controls do not (across all architectures)."),
+    ("C2", "The network encodes social events", "reproduces",
+     "Collisions decode at 0.85-0.98, partner approach/escape at 0.73-0.89 (chance 0.50)."),
+    ("C3", "Shared dimensions emerge between the two agents", "reproduces",
+     "Social pairs show far stronger cross-agent shared structure than non-social (RNN top-dim r 0.74 vs 0.07)."),
+    ("C4", "The chaser represents its partner; it predicts performance", "partial",
+     "Social chaser represents the partner ~250x the non-social control, and partner representation correlates with collisions (r=+0.64); but the increase-during-training did not reproduce (our RNN decreases)."),
+    ("C5", "Shared dimensions causally drive social behavior", "partial",
+     "Removing top-10 shared dimensions sharply degrades social behavior everywhere; but so does removing comparable random activity, so shared-specificity cannot be shown (low-dimensional representations)."),
+]
+
+
+def _claim_alignment(analyses_root: Path) -> dict[str, object]:
+    c4 = _read_json_or_none(analyses_root / "c4_mouse-run-run-1.json")
+    c5 = {}
+    for name, exp in (("RNN", "mouse-run-run-1"), ("MLP", "mouse-run-run-2-mlp"),
+                      ("SSM", "mouse-run-run-2-ssm"), ("Transformer", "mouse-run-run-2-transformer")):
+        data = _read_json_or_none(analyses_root / f"c5_{exp}.json")
+        if data and data.get("summary"):
+            coll = data["summary"].get("collisions_per_episode", {})
+            c5[name] = {
+                "unperturbed": coll.get("unperturbed", {}).get("mean"),
+                "shared_removed": coll.get("shared_removed", {}).get("mean"),
+                "random_removed": coll.get("random_removed", {}).get("mean"),
+            }
+    return {
+        "claims": [
+            {"id": cid, "claim": claim, "verdict": verdict, "detail": detail}
+            for cid, claim, verdict, detail in CLAIM_ALIGNMENT
+        ],
+        "c4": (c4 or {}).get("summary"),
+        "c5": c5,
     }
 
 

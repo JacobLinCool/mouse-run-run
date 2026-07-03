@@ -135,6 +135,7 @@
         }
         main.innerHTML = "";
         main.appendChild(overview(data));
+        if (data.claim_alignment) main.appendChild(claimSection(data.claim_alignment));
         main.appendChild(behaviorSection(data));
         main.appendChild(neuralSection(data));
         main.appendChild(crossArchSection(data));
@@ -166,6 +167,43 @@
             <strong>Answer:</strong> no &mdash; behavior, residualized PLSC, and CKA agree the RNN is the outlier; only it develops genuine internal shared dynamics at low mutual vision.</p>
             <table><thead><tr><th>architecture</th><th>memory mechanism</th><th>valid social pairs</th><th>valid non-social</th><th>degenerate (social)</th></tr></thead>
             <tbody>${rows}</tbody></table>
+          </div></section>`);
+      }
+
+      // Paper claim alignment (C1-C5)
+      function claimSection(ca) {
+        const badge = (v) => {
+          const map = { reproduces: ["#2f7d4f", "reproduces"], partial: ["#c4862b", "partial"], fails: ["#b42318", "does not"] };
+          const [c, t] = map[v] || ["#697177", v];
+          return `<span style="display:inline-block;padding:2px 9px;border-radius:999px;background:${c};color:#fff;font-size:12px;font-weight:650">${t}</span>`;
+        };
+        const rows = ca.claims
+          .map(
+            (c) => `<tr>
+              <td class="arch" style="white-space:nowrap">${c.id}</td>
+              <td style="text-align:left">${c.claim}</td>
+              <td style="text-align:center">${badge(c.verdict)}</td>
+              <td class="muted" style="text-align:left;font-size:12.5px">${c.detail}</td>
+            </tr>`
+          )
+          .join("");
+        let c5 = "";
+        if (ca.c5 && Object.keys(ca.c5).length) {
+          const r = Object.entries(ca.c5)
+            .map(
+              ([arch, v]) =>
+                `<tr><td class="arch ${arch}">${arch}</td><td>${fmt(v.unperturbed, 1)}</td><td>${fmt(v.shared_removed, 1)}</td><td>${fmt(v.random_removed, 1)}</td></tr>`
+            )
+            .join("");
+          c5 = `<h3 style="margin:18px 0 6px;font-size:14px">C5 perturbation — collisions per episode</h3>
+            <table><thead><tr><th>architecture</th><th>unperturbed</th><th>shared removed</th><th>random removed</th></tr></thead><tbody>${r}</tbody></table>
+            <p class="muted" style="font-size:12px;margin-top:6px">Removing the shared dimensions degrades social behavior — but so does removing comparable random activity, so the effect is not shared-specific (low-dimensional representations).</p>`;
+        }
+        return el(`<section class="card"><h2>Paper claim alignment <small>the five AI claims, C1&ndash;C5</small></h2>
+          <div class="card-body">
+            <p class="callout">The paper's biology&harr;AI bridge is at the level of <strong>representations, not cell types</strong> ("specific cell types in mice do not correspond directly to neural networks in artificial agents"). C1&ndash;C3 reproduce cleanly; C4&ndash;C5 reproduce their qualitative core, with the gaps traced to two measurable properties of our agents (the L2-regularized RNN's atypical strategy and low-dimensional representations).</p>
+            <table><thead><tr><th>claim</th><th>statement</th><th>verdict</th><th>what we found</th></tr></thead><tbody>${rows}</tbody></table>
+            ${c5}
           </div></section>`);
       }
 
