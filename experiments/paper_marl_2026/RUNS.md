@@ -2,6 +2,16 @@
 
 ## Run Log
 
+### mouse-run-run-2-{mlp,ssm,transformer} (2026-07-02/03) — cross-architecture study
+
+- Question: do different agent architectures learn the same internal representations on the same task? Four architectures share the analysis dimension (256), reward structure, seeds (0..9), and pipeline; they differ only in memory mechanism.
+- Architectures: rnn (mouse-run-run-1, the paper's vanilla ReLU RNN), mlp (frame-stack k=8, memoryless — the common-input floor control), ssm (gated diagonal linear recurrence), transformer (2-layer causal, no evolving state).
+- All three variants: **20/20 units completed on attempt 1**, zero failed/interrupted attempts, all checkpoints finite-validated. Configs `arch_{mlp,ssm,transformer}.json`.
+- SSM required a performance fix before it was paper-scale viable (sequential 100-step recurrence → chunked parallel scan + fused pair rollout, commit `defdfc3`); the first slow SSM run was interrupted at 12% and archived as `mouse-run-run-2-ssm.slow-superseded`, then re-run fresh with the scan.
+- Chaser collisions vs standardized random explorer (behavioral capability, higher = stronger chaser): transformer 41.3, ssm 35.9, mlp 26.9, rnn 9.0 — note the RNN's low self-play-trained chaser converges to a stealthier low-vision strategy; capability ranking is not the study's headline (representation geometry is).
+- Analyses: `scripts/analysis/neural_analyses.py` per experiment; cross-architecture CKA and residualized PLSC under `runs/analyses/`. Synthesis: `docs/paper-notes/cross-architecture-representation-study.md`.
+- Headline result: different architectures do **not** learn the same internal representations. Behavior, residualized vision-conditioned PLSC, and cross-architecture CKA agree that the RNN is the outlier — only it develops genuine internal shared dynamics at low mutual vision. The MLP is the common-input floor; the SSM and Transformer converge to a reactive high-vision solution whose apparent sharing is behavioral/input coupling plus (Transformer) a positional scaffold. SSM is also markedly degeneracy-prone.
+
 ### mouse-run-run-1 (2026-07-02) — primary 20-pair experiment
 
 - Code: commit `685f46e` (clean tree), host: rented RTX 4070 Ti SUPER (vast.ai, no volume).

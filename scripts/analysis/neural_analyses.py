@@ -55,11 +55,14 @@ def main() -> None:
         record = _analyze_rollout(path, seed=args.seed, permutations=args.permutations)
         append_jsonl(records_path, record)
         records.append(record)
-        print(
-            f"analyzed {record['unit_id']}: plsc_dims={record['plsc']['n_significant']}"
-            f" top_r={record['plsc']['top_dim_correlation']:.3f}",
-            flush=True,
-        )
+        if record.get("status", "ok") == "ok":
+            message = (
+                f"plsc_dims={record['plsc']['n_significant']}"
+                f" top_r={record['plsc']['top_dim_correlation']:.3f}"
+            )
+        else:
+            message = f"degenerate ({record['n_valid_episodes']}/{record['n_total_episodes']} valid)"
+        print(f"analyzed {record['unit_id']}: {message}", flush=True)
 
     summary = {
         "schema_version": 1,
@@ -75,6 +78,9 @@ def main() -> None:
     print(json.dumps(summary["by_task"], indent=2, sort_keys=True))
 
 
+MIN_VALID_EPISODES = 3
+
+
 def _analyze_rollout(path: Path, *, seed: int, permutations: int) -> dict[str, Any]:
     metadata, tensors = load_rollout(path)
     config = metadata.get("checkpoint_config") or {}
@@ -82,18 +88,10 @@ def _analyze_rollout(path: Path, *, seed: int, permutations: int) -> dict[str, A
     task = env.get("task")
     unit_seed = config.get("seed")
     chaser_episodes, explorer_episodes = episode_hidden_pairs(tensors)
-    plsc = plsc_shared_dimensions(
-        chaser_episodes,
-        explorer_episodes,
-        permutations=permutations,
-        seed=seed,
-    )
-    decoding = {
-        name: asdict(decode_balanced_accuracy(hidden, labels, seed=seed))
-        for name, (hidden, labels) in decoding_targets(tensors).items()
-    }
-    return {
-        "schema_version": 1,
+    n_valid = len(chaser_episodes)
+
+    record: dict[str, Any] = {
+        "schema_version": 2,
         "created_at": datetime.now(UTC).isoformat(),
         "rollout": str(path),
         "checkpoint": metadata.get("checkpoint"),
@@ -101,18 +99,42 @@ def _analyze_rollout(path: Path, *, seed: int, permutations: int) -> dict[str, A
         "seed": unit_seed,
         "architecture": config.get("architecture", "rnn"),
         "unit_id": f"{task}/seed_{int(unit_seed):04d}" if task is not None else str(path),
-        "n_valid_episodes": plsc.n_episodes,
-        "plsc": asdict(plsc),
-        "decoding": decoding,
+        "n_valid_episodes": n_valid,
+        "n_total_episodes": int(tensors["episode_degenerate"].shape[0]),
     }
+    # A unit with almost no non-degenerate episodes has no analyzable
+    # representation; recorded as degenerate (itself a result) rather than
+    # forcing a PLSC/decoding estimate from a handful of timesteps.
+    if n_valid < MIN_VALID_EPISODES:
+        record["status"] = "degenerate"
+        record["plsc"] = None
+        record["decoding"] = None
+        return record
+
+    record["status"] = "ok"
+    plsc = plsc_shared_dimensions(
+        chaser_episodes,
+        explorer_episodes,
+        permutations=permutations,
+        seed=seed,
+    )
+    record["plsc"] = asdict(plsc)
+    record["decoding"] = {
+        name: asdict(decode_balanced_accuracy(hidden, labels, seed=seed))
+        for name, (hidden, labels) in decoding_targets(tensors).items()
+    }
+    return record
 
 
 def _summarize_by_task(records: list[dict[str, Any]]) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for task in sorted({str(record.get("task")) for record in records}):
-        rows = [record for record in records if str(record.get("task")) == task]
+        task_rows = [record for record in records if str(record.get("task")) == task]
+        rows = [row for row in task_rows if row.get("status", "ok") == "ok"]
         summary: dict[str, Any] = {
-            "n": len(rows),
+            "n": len(task_rows),
+            "n_analyzable": len(rows),
+            "n_degenerate": len(task_rows) - len(rows),
             "plsc_n_significant": _mean_std(
                 [row["plsc"]["n_significant"] for row in rows]
             ),

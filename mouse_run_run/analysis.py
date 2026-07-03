@@ -101,6 +101,7 @@ def plsc_shared_dimensions(
     seed: int = 0,
     null_models: tuple[str, ...] = ("episode_shuffle", "circular_shift"),
     headline_null: str = "episode_shuffle",
+    subtract_time_mean: bool = False,
 ) -> PLSCResult:
     """Shared cross-agent dimensions via SVD of the cross-covariance.
 
@@ -123,10 +124,26 @@ def plsc_shared_dimensions(
     if headline_null not in null_models:
         raise ValueError("headline_null must be one of null_models")
     lengths = [len(episode) for episode in explorer_episodes]
-    if "episode_shuffle" in null_models and len(set(lengths)) != 1:
+    equal_length = len(set(lengths)) == 1
+    if "episode_shuffle" in null_models and not equal_length:
         raise ValueError("episode_shuffle null requires equal-length episodes")
-    X = _zscore(np.concatenate(chaser_episodes))
-    Y = _zscore(np.concatenate(explorer_episodes))
+    if subtract_time_mean and not equal_length:
+        raise ValueError("subtract_time_mean requires equal-length episodes")
+    chaser_stack = list(chaser_episodes)
+    explorer_stack = list(explorer_episodes)
+    if subtract_time_mean:
+        # Remove the across-episode mean at each timestep (the time-locked
+        # "evoked" response: positional embeddings, hidden-state clocks, any
+        # structure identical across episodes at a given t). PLSC then runs on
+        # the episode-specific residual, where genuine interaction lives, so
+        # the effect size is comparable across architectures with different
+        # deterministic temporal scaffolds.
+        chaser_mean = np.mean(chaser_stack, axis=0)
+        explorer_mean = np.mean(explorer_stack, axis=0)
+        chaser_stack = [episode - chaser_mean for episode in chaser_stack]
+        explorer_stack = [episode - explorer_mean for episode in explorer_stack]
+    X = _zscore(np.concatenate(chaser_stack))
+    Y = _zscore(np.concatenate(explorer_stack))
     n = X.shape[0]
 
     cross = X.T @ Y / (n - 1)
@@ -136,8 +153,7 @@ def plsc_shared_dimensions(
     # Permutation singular values only feed percentile thresholds; float32
     # halves the matmul cost without affecting the real SVD above.
     X32 = X.astype(np.float32)
-    Y32 = Y.astype(np.float32)
-    blocks = [Y32[start : start + length] for start, length in zip(offsets, lengths, strict=True)]
+    blocks = [Y.astype(np.float32)[start : start + length] for start, length in zip(offsets, lengths, strict=True)]
     nulls: dict[str, PLSCNull] = {}
     for null_model in null_models:
         rng = np.random.RandomState(seed)
