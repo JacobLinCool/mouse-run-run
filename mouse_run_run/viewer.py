@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
 import mimetypes
@@ -73,11 +74,17 @@ class _ViewerHandler(BaseHTTPRequestHandler):
             if parsed.path == "/":
                 self._send_static("index.html")
                 return
+            if parsed.path == "/report":
+                self._send_static("report.html")
+                return
             if parsed.path.startswith("/static/"):
                 self._send_static(parsed.path.removeprefix("/static/"))
                 return
             if parsed.path == "/api/checkpoints":
                 self._send_json({"checkpoints": self._checkpoints()})
+                return
+            if parsed.path == "/api/report":
+                self._send_json(self._report())
                 return
             if parsed.path == "/api/trajectory":
                 query = parse_qs(parsed.query)
@@ -156,6 +163,9 @@ class _ViewerHandler(BaseHTTPRequestHandler):
         checkpoints.sort(key=lambda item: float(item["modified_unix"]), reverse=True)
         return checkpoints
 
+    def _report(self) -> dict[str, object]:
+        return build_report(self.server.runs_root, self.server.project_root)
+
     def _trajectory(self, query: dict[str, list[str]]) -> dict[str, object]:
         checkpoint_raw = _first(query, "checkpoint")
         if not checkpoint_raw:
@@ -218,6 +228,143 @@ class _ViewerHandler(BaseHTTPRequestHandler):
             seed=seed,
             device_name=device,
         )
+
+
+ARCHITECTURE_LABELS = {
+    "mouse-run-run-1": ("RNN", "vanilla ReLU RNN (paper)"),
+    "mouse-run-run-2-mlp": ("MLP", "frame-stack MLP (memoryless floor)"),
+    "mouse-run-run-2-ssm": ("SSM", "gated linear recurrence"),
+    "mouse-run-run-2-transformer": ("Transformer", "causal transformer"),
+}
+ARCHITECTURE_ORDER = ("RNN", "MLP", "SSM", "Transformer")
+
+
+def build_report(runs_root: Path, project_root: Path) -> dict[str, object]:
+    """Aggregate the pre-computed experiment/analysis artifacts into a paper-
+    aligned report payload: behavioral (Fig. 5), neural (Fig. 6), and the
+    cross-architecture comparison. Reads only JSON/markdown/PNG already on
+    disk; computes nothing."""
+    reports_root = runs_root / "reports"
+    analyses_root = runs_root / "analyses"
+    experiments = []
+    for exp_dir in sorted(p for p in reports_root.glob("*") if p.is_dir()) if reports_root.exists() else []:
+        name = exp_dir.name
+        # The report is the paper-aligned cross-architecture study; skip
+        # unrelated experiments (smoke tests, ad-hoc runs).
+        if name not in ARCHITECTURE_LABELS:
+            continue
+        summary = _read_json_or_none(exp_dir / "summary.json")
+        if summary is None:
+            continue
+        neural = _read_json_or_none(analyses_root / name / "neural_summary.json")
+        label, description = ARCHITECTURE_LABELS.get(name, (name, ""))
+        experiments.append(
+            {
+                "experiment": name,
+                "architecture": label,
+                "description": description,
+                "valid_pairs": summary.get("valid_pairs_by_task", {}),
+                "behavior": _behavior_rows(summary.get("evaluation_metrics", {})),
+                "training": _training_rows(summary.get("training_metrics", {})),
+                "neural": _neural_rows(neural),
+                "exclusions": summary.get("rollout_exclusions", {}),
+            }
+        )
+    experiments.sort(key=lambda e: _arch_rank(e["architecture"]))
+
+    cross = {
+        "cka": _read_json_or_none(analyses_root / "cross_arch_cka.json"),
+        "per_unit": _read_json_or_none(analyses_root / "cross_arch_perunit.json"),
+        "architecture_order": list(ARCHITECTURE_ORDER),
+    }
+    figures = {}
+    figures_dir = analyses_root / "figures"
+    if figures_dir.exists():
+        for png in sorted(figures_dir.glob("*.png")):
+            figures[png.stem] = "data:image/png;base64," + base64.b64encode(png.read_bytes()).decode()
+
+    report_md = None
+    report_path = project_root / "docs" / "paper-notes" / "cross-architecture-representation-study.md"
+    if report_path.exists():
+        report_md = report_path.read_text(encoding="utf-8")
+
+    return {
+        "experiments": experiments,
+        "cross_architecture": cross,
+        "figures": figures,
+        "report_markdown": report_md,
+    }
+
+
+def _arch_rank(label: str) -> int:
+    return ARCHITECTURE_ORDER.index(label) if label in ARCHITECTURE_ORDER else len(ARCHITECTURE_ORDER)
+
+
+def _behavior_rows(evaluation: dict) -> dict[str, object]:
+    rows: dict[str, object] = {}
+    for task in ("social", "non_social"):
+        modes = evaluation.get(task)
+        if not isinstance(modes, dict):
+            continue
+        entry = {}
+        for mode in ("random_explorer", "random_chaser"):
+            metrics = modes.get(mode)
+            if isinstance(metrics, dict):
+                entry[mode] = {
+                    key: metrics.get(key, {}).get("mean")
+                    for key in (
+                        "collisions_per_episode",
+                        "chaser_partner_vision",
+                        "average_distance",
+                        "chaser_new_fields",
+                        "explorer_new_fields",
+                    )
+                }
+                entry[mode]["n"] = metrics.get("collisions_per_episode", {}).get("n")
+        rows[task] = entry
+    return rows
+
+
+def _training_rows(training: dict) -> dict[str, object]:
+    rows = {}
+    for task in ("social", "non_social"):
+        block = training.get(task)
+        if isinstance(block, dict):
+            rows[task] = {
+                key: block.get(key, {}).get("mean")
+                for key in ("collisions_per_episode", "chaser_return", "explorer_return", "value_loss")
+            }
+    return rows
+
+
+def _neural_rows(neural: dict | None) -> dict[str, object] | None:
+    if not neural:
+        return None
+    by_task = neural.get("by_task", {})
+    rows = {}
+    for task in ("social", "non_social"):
+        block = by_task.get(task)
+        if not isinstance(block, dict):
+            continue
+        rows[task] = {
+            "n": block.get("n"),
+            "n_degenerate": block.get("n_degenerate"),
+            "plsc_top_dim_correlation": block.get("plsc_top_dim_correlation", {}).get("mean"),
+            "decode_collision": block.get("decode_chaser_collision", {}).get("mean"),
+            "decode_escape": block.get("decode_chaser_partner_escape", {}).get("mean"),
+            "decode_approach": block.get("decode_explorer_partner_approach", {}).get("mean"),
+            "decode_collision_shuffled": block.get("decode_chaser_collision_shuffled", {}).get("mean"),
+        }
+    return rows
+
+
+def _read_json_or_none(path: Path) -> object | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 @torch.no_grad()
