@@ -141,16 +141,29 @@ class _ViewerHandler(BaseHTTPRequestHandler):
                 continue
             if metadata.get("format") != CHECKPOINT_FORMAT:
                 continue
+            experiment = _infer_experiment(path, root)
+            # Show only the study experiments in the explorer; stray smoke/
+            # ad-hoc runs would collide with real architectures in the
+            # architecture→seed→step cascade.
+            if experiment not in ARCHITECTURE_LABELS:
+                continue
             config = _loads_metadata(metadata, "config")
             metrics = _loads_metadata(metadata, "metrics")
             stat = path.stat()
+            architecture = config.get("architecture", "rnn")
             checkpoints.append(
                 {
                     "path": _display_path(path.resolve(), self.server.project_root),
                     "name": path.name,
+                    "experiment": experiment,
+                    "architecture": architecture,
+                    "architecture_label": ARCHITECTURE_LABELS.get(
+                        experiment, (architecture.upper(), "")
+                    )[0],
                     "task": (config.get("env") or {}).get("task"),
                     "seed": _infer_seed(path),
                     "update": _infer_update(path),
+                    "is_latest": path.stem in ("latest", "final"),
                     "size_bytes": stat.st_size,
                     "modified_unix": stat.st_mtime,
                     "modified": time.strftime(
@@ -946,6 +959,13 @@ def _loads_metadata(metadata: dict[str, str], key: str) -> dict[str, object]:
     if isinstance(decoded, dict):
         return decoded
     return {}
+
+
+def _infer_experiment(path: Path, runs_root: Path) -> str | None:
+    try:
+        return path.resolve().relative_to(runs_root.resolve()).parts[0]
+    except (ValueError, IndexError):
+        return None
 
 
 def _infer_seed(path: Path) -> int | None:

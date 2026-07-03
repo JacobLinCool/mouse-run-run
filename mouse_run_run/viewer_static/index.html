@@ -626,10 +626,22 @@
           <span id="checkpointCount">checkpoints</span>
           <a href="/report" style="display:block;margin-top:2px;color:#2189a8;text-decoration:none;font-size:12px;font-weight:650">Analysis report &rarr;</a>
         </div>
+        <input id="checkpointPath" type="hidden" />
+        <label>
+          Architecture
+          <select id="archSelect"></select>
+        </label>
+        <label>
+          Task
+          <select id="taskSelect"></select>
+        </label>
+        <label>
+          Seed
+          <select id="seedSelect"></select>
+        </label>
         <label>
           Checkpoint
-          <input id="checkpointPath" type="text" list="checkpointOptions" />
-          <datalist id="checkpointOptions"></datalist>
+          <select id="stepSelect"></select>
         </label>
         <label>
           Episode Seed
@@ -836,7 +848,10 @@
       const canvas = document.getElementById("world");
       const ctx = canvas.getContext("2d");
       const checkpointPath = document.getElementById("checkpointPath");
-      const checkpointOptions = document.getElementById("checkpointOptions");
+      const archSelect = document.getElementById("archSelect");
+      const taskSelect = document.getElementById("taskSelect");
+      const seedSelect = document.getElementById("seedSelect");
+      const stepSelect = document.getElementById("stepSelect");
       const checkpointCount = document.getElementById("checkpointCount");
       const seedInput = document.getElementById("seedInput");
       const opponentSelect = document.getElementById("opponentSelect");
@@ -873,7 +888,6 @@
       async function applyQueryParams() {
         const params = new URLSearchParams(location.search);
         const fields = [
-          ["checkpoint", checkpointPath],
           ["seed", seedInput],
           ["opponent", opponentSelect],
           ["device", deviceSelect],
@@ -882,6 +896,10 @@
         ];
         for (const [key, field] of fields) {
           if (params.get(key) !== null) field.value = params.get(key);
+        }
+        if (params.get("checkpoint") !== null) {
+          checkpointPath.value = params.get("checkpoint");
+          syncSelectorsFromPath(params.get("checkpoint"));
         }
         if (params.get("checkpoint") !== null || params.get("autoload") === "1") {
           await loadTrajectory();
@@ -893,6 +911,10 @@
       function bindControls() {
         refreshButton.addEventListener("click", loadCheckpoints);
         loadButton.addEventListener("click", loadTrajectory);
+        archSelect.addEventListener("change", buildTaskOptions);
+        taskSelect.addEventListener("change", buildSeedOptions);
+        seedSelect.addEventListener("change", buildStepOptions);
+        stepSelect.addEventListener("change", resolveCheckpoint);
         prevButton.addEventListener("click", () => setFrame(frameIndex - 1));
         nextButton.addEventListener("click", () => setFrame(frameIndex + 1));
         playButton.addEventListener("click", () => {
@@ -934,17 +956,104 @@
         const data = await response.json();
         if (!response.ok || data.error) throwMessage(data.message || "Failed to load checkpoints");
         checkpoints = data.checkpoints || [];
-        checkpointOptions.innerHTML = "";
-        for (const item of checkpoints) {
-          const option = document.createElement("option");
-          option.value = item.path;
-          option.label = `${item.task || "task"} ${item.seed ?? ""} ${item.update ?? ""} ${item.modified}`;
-          checkpointOptions.append(option);
-        }
         checkpointCount.textContent = `${checkpoints.length} checkpoints`;
-        if (checkpoints.length && !checkpointPath.value) checkpointPath.value = checkpoints[0].path;
+        buildArchOptions();
         renderSeedComparison();
         clearMessage();
+      }
+
+      // Cascading selectors: architecture -> task -> seed -> checkpoint step.
+      // checkpointPath (hidden) holds the resolved path for the rest of the app.
+      const archOrder = ["RNN", "MLP", "SSM", "Transformer"];
+      const fillSelect = (select, values, labelFn, keep) => {
+        const prev = keep && values.some((v) => String(v) === select.value) ? select.value : null;
+        select.innerHTML = "";
+        for (const v of values) {
+          const opt = document.createElement("option");
+          opt.value = String(v);
+          opt.textContent = labelFn(v);
+          select.append(opt);
+        }
+        if (prev !== null) select.value = prev;
+        select.disabled = values.length === 0;
+      };
+      const uniqueSorted = (arr, cmp) => [...new Set(arr)].sort(cmp);
+
+      function archLabel(a) {
+        const item = checkpoints.find((c) => (c.architecture_label || c.architecture) === a);
+        return item ? a : a;
+      }
+      function buildArchOptions() {
+        const labels = uniqueSorted(
+          checkpoints.map((c) => c.architecture_label || c.architecture || "?"),
+          (a, b) => (archOrder.indexOf(a) + 1 || 99) - (archOrder.indexOf(b) + 1 || 99)
+        );
+        fillSelect(archSelect, labels, (v) => v, true);
+        buildTaskOptions();
+      }
+      function buildTaskOptions() {
+        const arch = archSelect.value;
+        const tasks = uniqueSorted(
+          checkpoints.filter((c) => (c.architecture_label || c.architecture) === arch).map((c) => c.task || "?")
+        );
+        fillSelect(taskSelect, tasks, (v) => v.replace("_", " "), true);
+        buildSeedOptions();
+      }
+      function buildSeedOptions() {
+        const arch = archSelect.value,
+          task = taskSelect.value;
+        const seeds = uniqueSorted(
+          checkpoints
+            .filter((c) => (c.architecture_label || c.architecture) === arch && (c.task || "?") === task)
+            .map((c) => c.seed),
+          (a, b) => a - b
+        );
+        fillSelect(seedSelect, seeds, (v) => `seed ${v}`, true);
+        buildStepOptions();
+      }
+      function buildStepOptions() {
+        const arch = archSelect.value,
+          task = taskSelect.value,
+          seed = seedSelect.value;
+        const matches = checkpoints
+          .filter(
+            (c) =>
+              (c.architecture_label || c.architecture) === arch &&
+              (c.task || "?") === task &&
+              String(c.seed) === seed
+          )
+          .sort((a, b) => {
+            if (a.is_latest) return -1;
+            if (b.is_latest) return 1;
+            return (b.update || 0) - (a.update || 0);
+          });
+        const prev = matches.some((c) => c.path === stepSelect.value) ? stepSelect.value : null;
+        stepSelect.innerHTML = "";
+        for (const c of matches) {
+          const opt = document.createElement("option");
+          opt.value = c.path;
+          opt.textContent = c.is_latest ? "latest" : `update ${c.update}`;
+          stepSelect.append(opt);
+        }
+        if (prev) stepSelect.value = prev;
+        stepSelect.disabled = matches.length === 0;
+        resolveCheckpoint();
+      }
+      function resolveCheckpoint() {
+        checkpointPath.value = stepSelect.value || "";
+      }
+      function syncSelectorsFromPath(path) {
+        const item = checkpoints.find((c) => c.path === path);
+        if (!item) return false;
+        archSelect.value = item.architecture_label || item.architecture;
+        buildTaskOptions();
+        taskSelect.value = item.task || "?";
+        buildSeedOptions();
+        seedSelect.value = String(item.seed);
+        buildStepOptions();
+        stepSelect.value = item.path;
+        resolveCheckpoint();
+        return true;
       }
 
       async function loadTrajectory() {
