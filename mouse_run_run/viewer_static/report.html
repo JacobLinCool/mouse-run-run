@@ -91,11 +91,16 @@
         font-size: 14px;
       }
       .prose { font-size: 14px; }
+      .prose-body { max-width: 760px; }
       .prose h1 { font-size: 20px; }
       .prose h2 { font-size: 16px; margin-top: 22px; }
-      .prose table { margin: 10px 0; }
+      .prose h3 { font-size: 14.5px; margin-top: 16px; }
+      .prose p { margin: 10px 0; }
+      .prose ul { margin: 10px 0; padding-left: 22px; }
+      .prose li { margin: 4px 0; }
+      .prose table { margin: 12px 0; display: block; overflow-x: auto; }
       .prose code { background: #eef0ea; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
-      .prose details > summary { cursor: pointer; font-weight: 650; color: var(--explorer); }
+      .prose details > summary { cursor: pointer; font-weight: 650; color: var(--explorer); margin-bottom: 8px; }
       .muted { color: var(--muted); }
       .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: #eef0ea; font-size: 12px; color: var(--muted); }
       .err { color: var(--danger); padding: 20px; }
@@ -267,7 +272,7 @@
       // Full study prose (minimal markdown render)
       function reportSection(md) {
         return el(`<section class="card"><h2>Full study report</h2>
-          <div class="card-body prose"><details><summary>Read the full cross-architecture representation study</summary>${renderMarkdown(md)}</details></div></section>`);
+          <div class="card-body prose"><details open><summary>Full cross-architecture representation study</summary><div class="prose-body">${renderMarkdown(md)}</div></details></div></section>`);
       }
 
       function beh(e, task, mode, key) {
@@ -286,14 +291,33 @@
         const lines = md.split("\n");
         let html = "",
           inTable = false,
-          inCode = false;
+          inCode = false,
+          para = [], // buffered soft-wrapped paragraph lines
+          list = false;
         const inline = (s) =>
           esc(s)
             .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
             .replace(/`(.+?)`/g, "<code>$1</code>")
             .replace(/\*(.+?)\*/g, "<em>$1</em>");
+        // A blank line, heading, table, etc. flushes the running paragraph —
+        // consecutive non-blank text lines are one paragraph (Markdown
+        // soft-wrap), so hard-wrapped source no longer breaks mid-sentence.
+        const flushPara = () => {
+          if (para.length) {
+            html += `<p>${inline(para.join(" "))}</p>`;
+            para = [];
+          }
+        };
+        const closeList = () => {
+          if (list) {
+            html += "</ul>";
+            list = false;
+          }
+        };
         for (let raw of lines) {
           if (raw.startsWith("```")) {
+            flushPara();
+            closeList();
             inCode = !inCode;
             html += inCode ? "<pre style='background:#f2f3ef;padding:10px;border-radius:6px;overflow:auto'>" : "</pre>";
             continue;
@@ -304,26 +328,42 @@
           }
           const isRow = /^\s*\|.*\|\s*$/.test(raw);
           if (isRow) {
+            flushPara();
+            closeList();
             const cells = raw.trim().replace(/^\||\|$/g, "").split("|");
             if (/^[\s:|-]+$/.test(raw.replace(/\|/g, ""))) continue; // separator
             if (!inTable) {
               html += "<table>";
               inTable = true;
             }
-            const tag = "td";
-            html += "<tr>" + cells.map((c) => `<${tag}>${inline(c.trim())}</${tag}>`).join("") + "</tr>";
+            html += "<tr>" + cells.map((c) => `<td>${inline(c.trim())}</td>`).join("") + "</tr>";
             continue;
           } else if (inTable) {
             html += "</table>";
             inTable = false;
           }
-          if (/^# /.test(raw)) html += `<h1>${inline(raw.slice(2))}</h1>`;
-          else if (/^## /.test(raw)) html += `<h2>${inline(raw.slice(3))}</h2>`;
-          else if (/^### /.test(raw)) html += `<h3>${inline(raw.slice(4))}</h3>`;
-          else if (/^- /.test(raw)) html += `<li>${inline(raw.slice(2))}</li>`;
-          else if (raw.trim() === "" || /^---+$/.test(raw.trim())) html += "";
-          else html += `<p>${inline(raw)}</p>`;
+          if (/^#{1,3} /.test(raw)) {
+            flushPara();
+            closeList();
+            const level = raw.match(/^#+/)[0].length;
+            html += `<h${level}>${inline(raw.replace(/^#+ /, ""))}</h${level}>`;
+          } else if (/^- /.test(raw)) {
+            flushPara();
+            if (!list) {
+              html += "<ul>";
+              list = true;
+            }
+            html += `<li>${inline(raw.slice(2))}</li>`;
+          } else if (raw.trim() === "" || /^---+$/.test(raw.trim())) {
+            flushPara();
+            closeList();
+          } else {
+            closeList();
+            para.push(raw.trim());
+          }
         }
+        flushPara();
+        closeList();
         if (inTable) html += "</table>";
         return html;
       }
