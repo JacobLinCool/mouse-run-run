@@ -61,9 +61,15 @@ def measure_checkpoint(
         degenerate_threshold_fraction=0.01,
     )
     tensors = {k: v.cpu() for k, v in tensors.items()}
+    collisions = float(tensors["collision"].float().sum(0).mean().item())
+    # Skip checkpoints whose hidden state has exploded (spectral radius > 1
+    # can blow the aggressive low-L2 RNN's activations to ~1e36); the linear
+    # fit would overflow and the representation is meaningless.
+    hidden = tensors["chaser_hidden"]
+    if not torch.isfinite(hidden).all() or float(hidden.abs().max()) > 1e6:
+        return {"partner_unique": None, "r2_full": None, "collisions_per_episode": collisions, "n_valid_episodes": 0}
     Wa = chaser_action_weight(checkpoint)
     pr = partner_representation(tensors, Wa, grid_size=env_config.grid_size, seed=seed)
-    collisions = float(tensors["collision"].float().sum(0).mean().item())
     return {
         "partner_unique": pr.partner_unique,
         "r2_full": pr.r2_full,
@@ -146,7 +152,7 @@ def _summarize(results: dict) -> dict:
     for task, units in results.items():
         firsts, lasts, coll = [], [], []
         for u in units:
-            trend = [p for p in u["trend"] if p["n_valid_episodes"] >= 2]
+            trend = [p for p in u["trend"] if p["n_valid_episodes"] >= 2 and p["partner_unique"] is not None]
             if len(trend) < 2:
                 continue
             firsts.append(trend[0]["partner_unique"])
