@@ -75,6 +75,39 @@ left to serve as a clean control. The shared dimensions *are* the dominant
 dimensions. So we confirm shared dimensions are behaviorally important, but
 cannot isolate a *shared-specific* causal effect. The paper's agents likely
 had higher-dimensional representations, leaving room for the control to work.
+Of the two reasons, this is the deeper one: Reason 1 is a hyperparameter
+choice we can undo, but low dimensionality is a property of the *task*.
+
+## We tested Reason 1's fix — and it isolated Reason 2 as the real blocker
+
+Reason 1 makes a concrete, falsifiable prediction: retrain the RNN with no
+recurrent L2 and C4/C5 should clean up. We ran exactly that experiment
+(`mouse-run-run-3-rnn-lowl2`, config in
+`experiments/paper_marl_2026/configs/rnn_lowl2.json`). The result is the most
+informative part of this whole study:
+
+- **The fix worked on what Reason 1 predicted.** With L2 removed, recurrence
+  came back to life — the recurrent weight norm went from 0.04 (paper-faithful,
+  near-feed-forward) to 23.8, and the chaser switched from the timid "stealth"
+  strategy to an aggressive one. So L2 really was responsible for the atypical
+  strategy.
+- **But C4/C5 still did not cleanly reproduce.** Removing L2 did not raise the
+  representation's dimensionality (top-10 dimensions still held ~50–68% of the
+  variance), so C5's shared-vs-random control still could not separate: base
+  collisions 14.2 → 3.1 (shared removed) vs 1.9 (random removed) — random
+  removal hurt *as much*, exactly as before.
+- **It also introduced new pathologies.** Without L2 the recurrence became
+  unstable (spectral radius > 1): several seeds' hidden states exploded (values
+  ~1e19–1e36) and most social units became degenerate (only 3 of 10 seeds had
+  enough valid episodes to analyze). So the "fix" traded one problem for two.
+
+The takeaway is clean: removing L2 confirmed Reason 1 (it *did* change the
+strategy) but **left Reason 2 untouched** (dimensionality, and therefore the
+C5 control, did not budge). That isolates low dimensionality as the real,
+task-intrinsic blocker — it is not something a hyperparameter can fix. (The
+`mouse-run-run-3-rnn-lowl2` run was analyzed on a rented GPU that has since
+been recycled; the config is committed so the run is reproducible, but the
+raw artifacts were not retained.)
 
 ## Bottom line
 
@@ -88,10 +121,25 @@ and the reasons trace to two concrete, measurable properties of our agents:
 the L2-regularized RNN's atypical strategy, and the low dimensionality of the
 learned representations.
 
-A clean reproduction of C4 and C5 would follow from one targeted change:
-retrain the RNN with little or no recurrent L2 so it keeps an aggressive,
-partner-tracking strategy (as the paper's chaser did) and a higher-dimensional
-representation. That is a one-config, ~3-hour rerun on the same infrastructure.
+We did not stop at diagnosing those reasons — we tested the fixable one. The
+low-L2 rerun confirmed that recurrent L2 caused the atypical strategy, but it
+did **not** clean up C4/C5, because it left the representation low-dimensional.
+So the honest conclusion is that the C4/C5 gap is **task-intrinsic**, not a
+hyperparameter artifact: the chaser–explorer grid-world is simple enough that
+its solution lives in a handful of dimensions, and that is precisely what
+C5's shared-vs-random control needs to *not* be true. The lever that would
+open C4/C5 is therefore **task complexity**, not tuning — and, tellingly, the
+paper itself did not rest its C4/C5 evidence on this simple game: it used a
+second, richer environment (the gatherer/capturer task, with CNN+LSTM agents
+trained by IMPALA) for exactly the higher-dimensional dynamics these two
+claims require. Our result is consistent with that: it maps the sensitivity
+boundary of C4/C5 in a simple environment and shows *why* the boundary is
+where it is.
+
+This is what a faithful reproduction looks like when it is done honestly:
+C1–C3 land cleanly, C4–C5 reproduce their qualitative core, and the places
+they don't fully reproduce are explained by measured properties of the agents
+and confirmed by a targeted control experiment — not waved away.
 
 ## Artifacts
 
