@@ -1,6 +1,6 @@
 import torch
 
-from mouse_run_run.env import BatchedChaseEnv
+from mouse_run_run.env import ACTION_COUNT, BatchedChaseEnv
 from mouse_run_run.health import module_max_abs
 from mouse_run_run.policy import PolicyBase, PolicyOutput, RNNActorCritic
 from mouse_run_run.training_config import TrainConfig
@@ -32,7 +32,7 @@ def collect_rollout(
     explorer_action_tensor = torch.empty_like(chaser_action_tensor)
     chaser_log_prob_tensor = torch.empty(max_steps, batch_size, device=device)
     explorer_log_prob_tensor = torch.empty_like(chaser_log_prob_tensor)
-    chaser_logits_tensor = torch.empty(max_steps, batch_size, 4, device=device)
+    chaser_logits_tensor = torch.empty(max_steps, batch_size, ACTION_COUNT, device=device)
     explorer_logits_tensor = torch.empty_like(chaser_logits_tensor)
     chaser_value_tensor = torch.empty(max_steps, batch_size, device=device)
     explorer_value_tensor = torch.empty_like(chaser_value_tensor)

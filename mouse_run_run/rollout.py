@@ -9,7 +9,7 @@ from torch.distributions import Categorical
 from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.checkpoint_select import checkpoint_identity
 from mouse_run_run.degenerate import episode_degeneracy
-from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
+from mouse_run_run.env import ACTION_COUNT, BatchedChaseEnv, GridWorldConfig
 from mouse_run_run.evaluate import OpponentMode
 from mouse_run_run.policy import PolicyBase
 from mouse_run_run.serialization import save_rollout
@@ -162,11 +162,11 @@ def collect_batch(
         # trained network keeps observing), but its policy is never sampled so
         # the RNG stream only feeds the random opponent.
         if opponent_mode == "random_chaser":
-            chaser_action = torch.randint(4, (batch_size,), device=device)
+            chaser_action = torch.randint(ACTION_COUNT, (batch_size,), device=device)
         else:
             chaser_action = _select_action(chaser_output.logits, deterministic)
         if opponent_mode == "random_explorer":
-            explorer_action = torch.randint(4, (batch_size,), device=device)
+            explorer_action = torch.randint(ACTION_COUNT, (batch_size,), device=device)
         else:
             explorer_action = _select_action(explorer_output.logits, deterministic)
 

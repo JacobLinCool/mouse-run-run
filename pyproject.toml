@@ -30,7 +30,7 @@ build-backend = "setuptools.build_meta"
 include = ["mouse_run_run*"]
 
 [tool.setuptools.package-data]
-mouse_run_run = ["viewer_static/*.html"]
+mouse_run_run = ["viewer_static/*.html", "viewer_static/*.json"]
 
 [dependency-groups]
 dev = [

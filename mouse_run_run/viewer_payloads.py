@@ -12,7 +12,7 @@ from torch.nn import functional as F
 
 from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.degenerate import episode_degeneracy
-from mouse_run_run.env import BatchedChaseEnv
+from mouse_run_run.env import ACTION_COUNT, ACTION_DELTA_VALUES, BatchedChaseEnv
 from mouse_run_run.evaluate import OpponentMode
 from mouse_run_run.plsc import compute_plsc, project_norms, shared_variance_fraction
 from mouse_run_run.rollout import collect_batch
@@ -148,21 +148,13 @@ def build_report(runs_root: Path, project_root: Path) -> dict[str, object]:
     }
 
 
-CLAIM_ALIGNMENT = [
-    ("C1", "Social rewards produce social behavior", "reproduces",
-     "Across all four architectures, social chasers collide more and social explorers evade more effectively than non-social controls."),
-    ("C2", "The network encodes social events", "partial",
-     "Social-event decoding is strong, but our non-social collision decoder is also above chance (0.765 and 0.747), unlike the paper's chance-level control."),
-    ("C3", "Shared dimensions emerge between the two agents", "partial",
-     "The social/non-social gap in leading PLSC correlation reproduces (0.743 vs 0.067), but the significant-dimension count does not (183 vs 108)."),
-    ("C4", "The chaser represents its partner; it predicts performance", "partial",
-     "Partner information is much stronger in social chasers and correlates with collisions (r=+0.64), but it decreases rather than increases over training."),
-    ("C5", "Shared dimensions selectively drive social behavior", "inconclusive",
-     "Shared-dimension removal impairs behavior, but the nominal random-basis control is equally or more disruptive and its construction is not fully paper-faithful."),
-]
+# The C1-C5 claim table (statements, verdicts, written findings) is content,
+# not code: it ships as package data next to the report page that renders it.
+_CLAIM_ALIGNMENT_PATH = Path(__file__).with_name("viewer_static") / "claim_alignment.json"
 
 
 def _claim_alignment(analyses_root: Path) -> dict[str, object]:
+    static = json.loads(_CLAIM_ALIGNMENT_PATH.read_text(encoding="utf-8"))
     c4 = _read_json_or_none(analyses_root / "c4_mouse-run-run-1.json")
     c5 = {}
     c5_rnn_detail = {}
@@ -198,10 +190,7 @@ def _claim_alignment(analyses_root: Path) -> dict[str, object]:
                         )
                     }
     return {
-        "claims": [
-            {"id": cid, "claim": claim, "verdict": verdict, "detail": detail}
-            for cid, claim, verdict, detail in CLAIM_ALIGNMENT
-        ],
+        "claims": static["claims"],
         "c4": (c4 or {}).get("summary"),
         "c5": c5,
         "c5_rnn_detail": c5_rnn_detail,
@@ -458,14 +447,6 @@ def _round_matrix(tensor: torch.Tensor, digits: int = 3) -> list[list[float]]:
     return [[round(float(x), digits) for x in row] for row in tensor.tolist()]
 
 
-def _clamp_int(raw: str, *, low: int, high: int) -> int:
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        value = low
-    return max(low, min(high, value))
-
-
 @torch.no_grad()
 def generate_trajectory(
     checkpoint: Path,
@@ -529,9 +510,9 @@ def generate_trajectory(
         chaser_action = _select_action(chaser_probs, deterministic)
         explorer_action = _select_action(explorer_probs, deterministic)
         if opponent_mode == "random_chaser":
-            chaser_action = torch.randint(4, (1,), device=device)
+            chaser_action = torch.randint(ACTION_COUNT, (1,), device=device)
         elif opponent_mode == "random_explorer":
-            explorer_action = torch.randint(4, (1,), device=device)
+            explorer_action = torch.randint(ACTION_COUNT, (1,), device=device)
         elif opponent_mode != "self_play":
             raise ValueError(f"Unsupported opponent mode: {opponent_mode}")
 
@@ -789,7 +770,7 @@ def _movement(
     collision: bool,
     grid_size: int,
 ) -> dict[str, object]:
-    row_delta, col_delta = ((-1, 0), (0, 1), (1, 0), (0, -1))[action]
+    row_delta, col_delta = ACTION_DELTA_VALUES[action]
     raw = [before[0] + row_delta, before[1] + col_delta]
     moved = before != after
     blocked_by_wall = (
@@ -816,18 +797,6 @@ def _empty_movement() -> dict[str, object]:
         "blocked_by_collision": False,
         "attempted": None,
     }
-
-
-def _resolve_checkpoint(raw: str, *, project_root: Path) -> Path:
-    path = Path(raw).expanduser()
-    if not path.is_absolute():
-        path = project_root / path
-    path = path.resolve()
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(str(path))
-    if path.suffix != ".safetensors":
-        raise ValueError("checkpoint must be a .safetensors file")
-    return path
 
 
 def _display_path(path: Path, project_root: Path) -> str:
@@ -877,17 +846,6 @@ def _infer_update(path: Path) -> int | None:
     if stem == "latest" or stem == "final":
         return None
     return None
-
-
-def _first(query: dict[str, list[str]], key: str, default: str = "") -> str:
-    values = query.get(key)
-    if not values:
-        return default
-    return values[0]
-
-
-def _parse_bool(value: str) -> bool:
-    return value.lower() in {"1", "true", "yes", "on"}
 
 
 def _position(tensor: torch.Tensor) -> list[int]:

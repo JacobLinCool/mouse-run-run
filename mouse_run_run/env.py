@@ -23,6 +23,8 @@ ACTION_DELTA_VALUES: tuple[tuple[int, int], ...] = (
 
 ACTION_DELTAS = torch.tensor(ACTION_DELTA_VALUES, dtype=torch.long)
 
+ACTION_COUNT = len(ACTION_DELTA_VALUES)
+
 # [PAPER-METHODS] Supplementary Table 3; [OFFICIAL-ARENAS] lines that
 # implement r1=explorer and r2=chaser. The names below use paper roles.
 # Single source of truth for the reward table: the CPU path (_rewards) uses

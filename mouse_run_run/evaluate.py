@@ -7,7 +7,7 @@ from torch.distributions import Categorical
 
 from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.degenerate import episode_degeneracy
-from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
+from mouse_run_run.env import ACTION_COUNT, BatchedChaseEnv, GridWorldConfig
 from mouse_run_run.policy import PolicyBase
 from mouse_run_run.training_config import select_device
 
@@ -149,13 +149,13 @@ def _evaluate_batch(
         # pass would be discarded, and sampling from it would perturb the RNG
         # stream shared with the random opponent.
         if opponent_mode == "random_chaser":
-            chaser_action = torch.randint(4, (batch_size,), device=device)
+            chaser_action = torch.randint(ACTION_COUNT, (batch_size,), device=device)
         else:
             chaser_output = chaser(chaser_observation, chaser_hidden)
             chaser_action = _select_action(chaser_output.logits, deterministic)
             chaser_hidden = chaser_output.state
         if opponent_mode == "random_explorer":
-            explorer_action = torch.randint(4, (batch_size,), device=device)
+            explorer_action = torch.randint(ACTION_COUNT, (batch_size,), device=device)
         else:
             explorer_output = explorer(explorer_observation, explorer_hidden)
             explorer_action = _select_action(explorer_output.logits, deterministic)

@@ -10,10 +10,6 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from mouse_run_run.training_config import DEVICE_CHOICES
 from mouse_run_run.viewer_payloads import (
-    _clamp_int,
-    _first,
-    _parse_bool,
-    _resolve_checkpoint,
     build_report,
     checkpoint_listing,
     compute_shared_subspace,
@@ -171,5 +167,36 @@ class ViewerHandler(BaseHTTPRequestHandler):
             seed=seed,
             device_name=device,
         )
+
+
+def _first(query: dict[str, list[str]], key: str, default: str = "") -> str:
+    values = query.get(key)
+    if not values:
+        return default
+    return values[0]
+
+
+def _parse_bool(value: str) -> bool:
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _clamp_int(raw: str, *, low: int, high: int) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = low
+    return max(low, min(high, value))
+
+
+def _resolve_checkpoint(raw: str, *, project_root: Path) -> Path:
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = project_root / path
+    path = path.resolve()
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(str(path))
+    if path.suffix != ".safetensors":
+        raise ValueError("checkpoint must be a .safetensors file")
+    return path
 
 

@@ -1,0 +1,34 @@
+{
+  "claims": [
+    {
+      "id": "C1",
+      "claim": "Social rewards produce social behavior",
+      "verdict": "reproduces",
+      "detail": "Across all four architectures, social chasers collide more and social explorers evade more effectively than non-social controls."
+    },
+    {
+      "id": "C2",
+      "claim": "The network encodes social events",
+      "verdict": "partial",
+      "detail": "Social-event decoding is strong, but our non-social collision decoder is also above chance (0.765 and 0.747), unlike the paper's chance-level control."
+    },
+    {
+      "id": "C3",
+      "claim": "Shared dimensions emerge between the two agents",
+      "verdict": "partial",
+      "detail": "The social/non-social gap in leading PLSC correlation reproduces (0.743 vs 0.067), but the significant-dimension count does not (183 vs 108)."
+    },
+    {
+      "id": "C4",
+      "claim": "The chaser represents its partner; it predicts performance",
+      "verdict": "partial",
+      "detail": "Partner information is much stronger in social chasers and correlates with collisions (r=+0.64), but it decreases rather than increases over training."
+    },
+    {
+      "id": "C5",
+      "claim": "Shared dimensions selectively drive social behavior",
+      "verdict": "inconclusive",
+      "detail": "Shared-dimension removal impairs behavior, but the nominal random-basis control is equally or more disruptive and its construction is not fully paper-faithful."
+    }
+  ]
+}
