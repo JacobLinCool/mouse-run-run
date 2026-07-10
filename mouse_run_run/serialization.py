@@ -8,6 +8,8 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
+from mouse_run_run.provenance import provenance_block
+
 
 @dataclass(frozen=True)
 class TrainingState:
@@ -23,6 +25,11 @@ class TrainingState:
 
 CHECKPOINT_FORMAT = "mouse-run-run-checkpoint-v1"
 ROLLOUT_FORMAT = "mouse-run-run-rollout-v1"
+
+# Version of the config payload layout stored in checkpoint metadata.
+# Checkpoints from before versioning carry no marker and load as legacy;
+# checkpoints written by newer code than this reader fail with a clear error.
+CONFIG_SCHEMA_VERSION = 1
 
 
 def save_checkpoint(
@@ -41,7 +48,9 @@ def save_checkpoint(
     metadata = {
         "format": CHECKPOINT_FORMAT,
         "config": _to_json(config),
+        "config_schema_version": str(CONFIG_SCHEMA_VERSION),
         "metrics": _to_json(metrics),
+        "provenance": _to_json(provenance_block(cwd=Path.cwd(), config=config)),
     }
     if training_state is not None:
         state_tensors, state_metadata = _encode_training_state(training_state)
@@ -54,6 +63,7 @@ def load_checkpoint(path: Path) -> tuple[dict[str, Any], dict[str, Any], dict[st
     metadata = read_metadata(path)
     if metadata.get("format") != CHECKPOINT_FORMAT:
         raise ValueError(f"Unsupported checkpoint format in {path}: {metadata.get('format')}")
+    _check_config_schema_version(metadata, path)
 
     tensors = load_file(str(path), device="cpu")
     return (
@@ -95,7 +105,38 @@ def read_checkpoint_metadata(path: Path) -> tuple[dict[str, Any], dict[str, Any]
     metadata = read_metadata(path)
     if metadata.get("format") != CHECKPOINT_FORMAT:
         raise ValueError(f"Unsupported checkpoint format in {path}: {metadata.get('format')}")
+    _check_config_schema_version(metadata, path)
     return _from_json(metadata["config"]), _from_json(metadata["metrics"])
+
+
+def read_checkpoint_provenance(path: Path) -> dict[str, Any] | None:
+    """Provenance block stored in a checkpoint, or None for legacy files."""
+    metadata = read_metadata(path)
+    if metadata.get("format") != CHECKPOINT_FORMAT:
+        raise ValueError(f"Unsupported checkpoint format in {path}: {metadata.get('format')}")
+    raw_provenance = metadata.get("provenance")
+    if raw_provenance is None:
+        return None
+    return _from_json(raw_provenance)
+
+
+def _check_config_schema_version(metadata: Mapping[str, str], path: Path) -> None:
+    raw_version = metadata.get("config_schema_version")
+    if raw_version is None:
+        # Legacy checkpoint from before config schema versioning.
+        return
+    try:
+        version = int(raw_version)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid config schema version in {path}: {raw_version!r}"
+        ) from exc
+    if version > CONFIG_SCHEMA_VERSION:
+        raise ValueError(
+            f"Checkpoint {path} uses config schema version {version}, but this"
+            f" code only supports versions <= {CONFIG_SCHEMA_VERSION};"
+            " update mouse_run_run to read it."
+        )
 
 
 def load_training_state(path: Path) -> TrainingState | None:

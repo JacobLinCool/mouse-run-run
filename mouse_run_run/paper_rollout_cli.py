@@ -5,8 +5,10 @@ import hashlib
 import json
 import shlex
 import sys
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from safetensors import SafetensorError
 
@@ -15,6 +17,22 @@ from mouse_run_run.health import checkpoint_health
 from mouse_run_run.rollout import collect_rollouts
 from mouse_run_run.serialization import read_checkpoint_metadata
 from mouse_run_run.training_config import DEVICE_CHOICES
+
+
+# Collection parameters that determine a rollout's contents, with the parser
+# defaults that were in effect before resume keys included them. Records from
+# before these fields existed (or with null values) are treated as having been
+# produced under those defaults, so completed work under unchanged settings is
+# never re-run. The requested --device is deliberately excluded: it names a
+# host preference ("auto"), not a collection setting.
+_RESUME_KEY_FIELDS: tuple[tuple[str, object], ...] = (
+    ("episodes", 25),
+    ("max_steps", 500),
+    ("batch_size", 25),
+    ("deterministic", False),
+    ("seed", 0),
+    ("degenerate_threshold_fraction", 0.01),
+)
 
 
 def main() -> None:
@@ -57,10 +75,11 @@ def main() -> None:
 
     records_path = args.records or args.output_root / "paper_rollout_records.jsonl"
     already_collected = set() if args.force else _collected_checkpoints(records_path)
+    settings = _settings_key(vars(args))
     failure_count = 0
     for checkpoint in checkpoints:
         output = args.output_root / f"{_output_stem(checkpoint)}.safetensors"
-        if str(checkpoint) in already_collected and output.exists():
+        if (str(checkpoint), settings) in already_collected and output.exists():
             print(f"skipped_already_collected={checkpoint}", flush=True)
             continue
         health = checkpoint_health(checkpoint)
@@ -145,11 +164,11 @@ def main() -> None:
         raise SystemExit(1)
 
 
-def _collected_checkpoints(records_path: Path) -> set[str]:
-    """Checkpoints that already have an ok rollout record."""
+def _collected_checkpoints(records_path: Path) -> set[tuple[str, tuple[object, ...]]]:
+    """(checkpoint, settings) pairs that already have an ok rollout record."""
     if not records_path.exists():
         return set()
-    collected: set[str] = set()
+    collected: set[tuple[str, tuple[object, ...]]] = set()
     with records_path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
@@ -159,8 +178,16 @@ def _collected_checkpoints(records_path: Path) -> set[str]:
             except json.JSONDecodeError:
                 continue
             if record.get("status") == "ok":
-                collected.add(str(record.get("checkpoint")))
+                collected.add((str(record.get("checkpoint")), _settings_key(record)))
     return collected
+
+
+def _settings_key(values: Mapping[str, Any]) -> tuple[object, ...]:
+    """Resume-key view of the collection settings in a record or args dict."""
+    return tuple(
+        default if values.get(field) is None else values.get(field)
+        for field, default in _RESUME_KEY_FIELDS
+    )
 
 
 def _append_record(path: Path, record: dict[str, object]) -> None:

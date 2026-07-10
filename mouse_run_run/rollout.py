@@ -7,6 +7,7 @@ import torch
 from torch.distributions import Categorical
 
 from mouse_run_run.checkpoint_loading import load_policy_pair
+from mouse_run_run.checkpoint_select import checkpoint_identity
 from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
 from mouse_run_run.evaluate import OpponentMode
@@ -77,6 +78,7 @@ def collect_rollouts(
             "schema_version": 3,
             "analysis_protocol": analysis_protocol,
             "checkpoint": str(checkpoint),
+            "checkpoint_identity": checkpoint_identity(config),
             "checkpoint_config": config,
             "env_config": asdict(env_config),
             "episodes": episodes,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,14 @@ from safetensors import safe_open
 
 from mouse_run_run.health import checkpoint_health
 from mouse_run_run.provenance import collect_provenance, hash_file, write_json_atomic
+
+
+# Newest record schema each table knows how to ingest. Rows written by newer
+# code are skipped with a warning instead of being silently folded into
+# canonical tables; rows without a schema_version predate versioning and are
+# ingested as legacy.
+EVALUATION_MAX_SCHEMA_VERSION = 3
+ROLLOUT_RECORD_MAX_SCHEMA_VERSION = 2
 
 
 def main() -> None:
@@ -26,7 +35,10 @@ def main() -> None:
 
     runs = _run_rows(experiment_root)
     evaluations = _dedupe_last(
-        _jsonl_rows(experiment_root.rglob("*eval*.jsonl")),
+        _jsonl_rows(
+            experiment_root.rglob("*eval*.jsonl"),
+            max_schema_version=EVALUATION_MAX_SCHEMA_VERSION,
+        ),
         key=lambda row: (
             row.get("checkpoint"),
             row.get("opponent_mode"),
@@ -133,7 +145,7 @@ def _mark_latest_successful(rows: list[dict[str, Any]]) -> None:
         row["is_latest_successful"] = True
 
 
-def _jsonl_rows(paths: object) -> list[dict[str, Any]]:
+def _jsonl_rows(paths: object, *, max_schema_version: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in sorted(paths):
         if not path.is_file():
@@ -143,10 +155,29 @@ def _jsonl_rows(paths: object) -> list[dict[str, Any]]:
                 if not line.strip():
                     continue
                 row = json.loads(line)
+                if not _schema_version_compatible(row.get("schema_version"), max_schema_version):
+                    print(
+                        f"warning: skipping {path}:{line_number}:"
+                        f" schema_version={row.get('schema_version')!r} is not"
+                        f" ingestible (supported: absent or <= {max_schema_version})",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    continue
                 row["source_path"] = str(path)
                 row["source_line"] = line_number
                 rows.append(row)
     return rows
+
+
+def _schema_version_compatible(version: Any, max_schema_version: int) -> bool:
+    if version is None:
+        return True  # Legacy rows predate schema versioning.
+    return (
+        isinstance(version, int)
+        and not isinstance(version, bool)
+        and version <= max_schema_version
+    )
 
 
 def _dedupe_last(
@@ -167,7 +198,10 @@ def _dedupe_last(
 
 def _rollout_rows(experiment_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     records = _dedupe_last(
-        _jsonl_rows(experiment_root.rglob("*rollout*_records.jsonl")),
+        _jsonl_rows(
+            experiment_root.rglob("*rollout*_records.jsonl"),
+            max_schema_version=ROLLOUT_RECORD_MAX_SCHEMA_VERSION,
+        ),
         key=lambda row: (row.get("checkpoint"), row.get("output")),
     )
     rows = []

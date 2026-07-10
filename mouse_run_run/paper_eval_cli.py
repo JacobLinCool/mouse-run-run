@@ -4,9 +4,11 @@ import argparse
 import json
 import shlex
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from safetensors import SafetensorError
 
@@ -18,6 +20,21 @@ from mouse_run_run.training_config import DEVICE_CHOICES
 
 
 PAPER_RANDOM_OPPONENT_MODES = ("random_explorer", "random_chaser")
+
+# Evaluation parameters that determine a record's results, with the parser
+# defaults that were in effect before resume keys included them. Records from
+# before these fields existed (or with null values) are treated as having been
+# produced under those defaults, so completed work under unchanged settings is
+# never re-run. The requested --device is deliberately excluded: it names a
+# host preference ("auto"), not an evaluation setting.
+_RESUME_KEY_FIELDS: tuple[tuple[str, object], ...] = (
+    ("episodes", 100),
+    ("max_steps", 100),
+    ("batch_size", 128),
+    ("deterministic", False),
+    ("seed", 0),
+    ("degenerate_threshold_fraction", 0.01),
+)
 
 
 def main() -> None:
@@ -63,6 +80,7 @@ def main() -> None:
         if args.force or args.output is None
         else _evaluated_keys(args.output)
     )
+    settings = _settings_key(vars(args))
 
     output_handle = None
     if args.output is not None:
@@ -74,7 +92,7 @@ def main() -> None:
             pending_modes = [
                 mode
                 for mode in PAPER_RANDOM_OPPONENT_MODES
-                if (str(checkpoint), mode) not in already_evaluated
+                if (str(checkpoint), mode, settings) not in already_evaluated
             ]
             if not pending_modes:
                 print(f"skipped_already_evaluated={checkpoint}", flush=True)
@@ -155,11 +173,11 @@ def main() -> None:
             output_handle.close()
 
 
-def _evaluated_keys(output: Path) -> set[tuple[str, str]]:
-    """(checkpoint, opponent_mode) pairs that already have an ok record."""
+def _evaluated_keys(output: Path) -> set[tuple[str, str, tuple[object, ...]]]:
+    """(checkpoint, opponent_mode, settings) triples with an ok record."""
     if not output.exists():
         return set()
-    keys: set[tuple[str, str]] = set()
+    keys: set[tuple[str, str, tuple[object, ...]]] = set()
     with output.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
@@ -170,8 +188,22 @@ def _evaluated_keys(output: Path) -> set[tuple[str, str]]:
                 continue
             if record.get("status") != "ok":
                 continue
-            keys.add((str(record.get("checkpoint")), str(record.get("opponent_mode"))))
+            keys.add(
+                (
+                    str(record.get("checkpoint")),
+                    str(record.get("opponent_mode")),
+                    _settings_key(record),
+                )
+            )
     return keys
+
+
+def _settings_key(values: Mapping[str, Any]) -> tuple[object, ...]:
+    """Resume-key view of the evaluation settings in a record or args dict."""
+    return tuple(
+        default if values.get(field) is None else values.get(field)
+        for field, default in _RESUME_KEY_FIELDS
+    )
 
 
 def _base_record(

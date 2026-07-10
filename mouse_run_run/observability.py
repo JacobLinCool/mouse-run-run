@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mouse_run_run.provenance import provenance_block
+
 try:
     from torch.utils.tensorboard import SummaryWriter
 except ImportError:  # pragma: no cover - exercised only when tensorboard is absent.
@@ -83,7 +85,10 @@ class TrainingObserver:
 
         if self.run_dir:
             self.run_dir.mkdir(parents=True, exist_ok=True)
-            _write_json_atomic(self.run_dir / "config.json", config)
+            _write_json_atomic(
+                self.run_dir / "config.json",
+                {**config, "provenance": provenance_block(cwd=Path.cwd(), config=config)},
+            )
         if self.metrics_path:
             self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
         if self.status_path:

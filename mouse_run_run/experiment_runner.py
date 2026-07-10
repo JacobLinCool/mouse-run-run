@@ -406,8 +406,22 @@ class ExperimentRunner:
             "initial_attempts": self.jobs,
         }
         # Every invocation is recorded append-only; manifest.json itself is
-        # raw evidence of the first launch and is never overwritten.
+        # raw evidence of the first launch and is never overwritten. Resumed
+        # re-invocations may run different code, so each invocation's
+        # provenance also gets a dedicated record in invocations.jsonl.
         self._append_raw_record("runner_invocation", manifest)
+        append_jsonl(
+            self.root / "invocations.jsonl",
+            {
+                "schema_version": 1,
+                "experiment": self.args.experiment,
+                "invoked_at": manifest["created_at"],
+                "resume": self.args.resume,
+                "config_sha256": manifest["config_sha256"],
+                "experiment_spec_sha256": spec_hash,
+                "provenance": manifest["provenance"],
+            },
+        )
         manifest_path = self.root / "manifest.json"
         if manifest_path.exists():
             try:

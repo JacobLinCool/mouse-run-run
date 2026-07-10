@@ -2,6 +2,7 @@ from dataclasses import asdict
 
 import pytest
 import torch
+from safetensors.torch import save_file
 
 from mouse_run_run.analysis import load_rollout
 from mouse_run_run.checkpoint_loading import load_policy_pair
@@ -10,10 +11,12 @@ from mouse_run_run.env import GridWorldConfig
 from mouse_run_run.plsc import compute_plsc
 from mouse_run_run.policy import build_policy
 from mouse_run_run.serialization import (
+    CHECKPOINT_FORMAT,
     TrainingState,
     load_checkpoint,
     load_training_state,
     read_checkpoint_metadata,
+    read_checkpoint_provenance,
     save_checkpoint,
     save_rollout,
 )
@@ -83,6 +86,60 @@ def test_checkpoint_and_rollout_round_trip(tmp_path) -> None:
     assert rollout_metadata["schema_version"] == 3
     assert tensors["episode_degenerate"].tolist() == [False, True]
     assert tensors["chaser_hidden"].shape == (2, 2, 3)
+
+
+def test_checkpoint_provenance_recorded_and_legacy_returns_none(tmp_path) -> None:
+    torch.manual_seed(0)
+    config = GridWorldConfig(max_steps=5)
+    chaser = build_policy("rnn", config.observation_size, hidden_size=8)
+    explorer = build_policy("rnn", config.observation_size, hidden_size=8)
+    checkpoint = tmp_path / "checkpoint.safetensors"
+    save_checkpoint(
+        checkpoint,
+        config={"env": asdict(config), "architecture": "rnn", "hidden_size": 8},
+        metrics={},
+        chaser_state=chaser.state_dict(),
+        explorer_state=explorer.state_dict(),
+    )
+
+    provenance = read_checkpoint_provenance(checkpoint)
+    assert provenance is not None
+    assert provenance["schema_version"] == 1
+    assert provenance["created_at"]
+    assert "git" in provenance
+    assert provenance["config_sha256"]
+
+    # Checkpoints from before provenance/config versioning still load, and the
+    # accessor reports their missing provenance as None instead of raising.
+    legacy = tmp_path / "legacy.safetensors"
+    save_file(
+        {"chaser.w": torch.zeros(1), "explorer.w": torch.zeros(1)},
+        str(legacy),
+        metadata={"format": CHECKPOINT_FORMAT, "config": "{}", "metrics": "{}"},
+    )
+    assert read_checkpoint_provenance(legacy) is None
+    legacy_config, legacy_metrics, _, _ = load_checkpoint(legacy)
+    assert legacy_config == {}
+    assert legacy_metrics == {}
+
+
+def test_newer_config_schema_version_fails_clearly(tmp_path) -> None:
+    newer = tmp_path / "newer.safetensors"
+    save_file(
+        {"chaser.w": torch.zeros(1), "explorer.w": torch.zeros(1)},
+        str(newer),
+        metadata={
+            "format": CHECKPOINT_FORMAT,
+            "config": "{}",
+            "config_schema_version": "999",
+            "metrics": "{}",
+        },
+    )
+
+    with pytest.raises(ValueError, match="config schema version 999"):
+        load_checkpoint(newer)
+    with pytest.raises(ValueError, match="config schema version 999"):
+        read_checkpoint_metadata(newer)
 
 
 def test_load_policy_pair_rebuilds_eval_policies(tmp_path) -> None:

@@ -15,6 +15,7 @@ from mouse_run_run.analysis import (
     load_rollout,
     plsc_shared_dimensions,
 )
+from mouse_run_run.checkpoint_select import checkpoint_identity
 from mouse_run_run.provenance import append_jsonl, collect_provenance, write_json_atomic
 
 
@@ -84,9 +85,7 @@ MIN_VALID_EPISODES = 3
 def _analyze_rollout(path: Path, *, seed: int, permutations: int) -> dict[str, Any]:
     metadata, tensors = load_rollout(path)
     config = metadata.get("checkpoint_config") or {}
-    env = config.get("env") or {}
-    task = env.get("task")
-    unit_seed = config.get("seed")
+    identity = checkpoint_identity(config)
     chaser_episodes, explorer_episodes = episode_hidden_pairs(tensors)
     n_valid = len(chaser_episodes)
 
@@ -95,10 +94,10 @@ def _analyze_rollout(path: Path, *, seed: int, permutations: int) -> dict[str, A
         "created_at": datetime.now(UTC).isoformat(),
         "rollout": str(path),
         "checkpoint": metadata.get("checkpoint"),
-        "task": task,
-        "seed": unit_seed,
+        "task": identity["task"],
+        "seed": identity["seed"],
         "architecture": config.get("architecture", "rnn"),
-        "unit_id": f"{task}/seed_{int(unit_seed):04d}" if task is not None else str(path),
+        "unit_id": identity["unit_id"] or str(path),
         "n_valid_episodes": n_valid,
         "n_total_episodes": int(tensors["episode_degenerate"].shape[0]),
     }

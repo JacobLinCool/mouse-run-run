@@ -55,6 +55,22 @@ def append_jsonl(path: Path, record: Mapping[str, Any]) -> None:
         handle.write(json.dumps(_json_ready(record), sort_keys=True) + "\n")
 
 
+def provenance_block(*, cwd: Path, config: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Compact provenance stamp embedded in artifacts (checkpoints, run dirs).
+
+    Smaller than :func:`collect_provenance`: just when the artifact was
+    written, the git state that wrote it, and a hash of its governing config.
+    """
+    block: dict[str, Any] = {
+        "schema_version": 1,
+        "created_at": utc_now(),
+        "git": git_info(cwd),
+    }
+    if config is not None:
+        block["config_sha256"] = json_hash(config)
+    return block
+
+
 def collect_provenance(*, cwd: Path, command: str | None = None) -> dict[str, Any]:
     return {
         "schema_version": 1,
