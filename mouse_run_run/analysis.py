@@ -26,6 +26,7 @@ import numpy as np
 import torch
 from safetensors.torch import load_file
 
+from mouse_run_run.plsc import cross_covariance_svd, null_singular_values, zscore_columns
 from mouse_run_run.policy import build_policy
 from mouse_run_run.serialization import ROLLOUT_FORMAT, load_checkpoint, read_metadata
 
@@ -74,7 +75,7 @@ class PLSCNull:
 
 
 @dataclass(frozen=True)
-class PLSCResult:
+class SharedDimensionsResult:
     singular_values: list[float]
     nulls: dict[str, PLSCNull]
     n_significant: int
@@ -102,11 +103,14 @@ def plsc_shared_dimensions(
     null_models: tuple[str, ...] = ("episode_shuffle", "circular_shift"),
     headline_null: str = "episode_shuffle",
     subtract_time_mean: bool = False,
-) -> PLSCResult:
+) -> SharedDimensionsResult:
     """Shared cross-agent dimensions via SVD of the cross-covariance.
 
-    Two permutation nulls, significant when the rank-k singular value exceeds
-    the given percentile of the permuted rank-k values:
+    The estimator core (z-scoring, cross-covariance, SVD, permutation nulls)
+    lives in ``mouse_run_run.plsc``; this entry point pools per-episode hidden
+    states and reports the episode-based nulls. Two permutation nulls,
+    significant when the rank-k singular value exceeds the given percentile of
+    the permuted rank-k values:
 
     - episode_shuffle (headline): re-pairs the explorer's episodes with other
       episodes' chaser data. Both sides keep their within-episode temporal
@@ -142,41 +146,39 @@ def plsc_shared_dimensions(
         explorer_mean = np.mean(explorer_stack, axis=0)
         chaser_stack = [episode - chaser_mean for episode in chaser_stack]
         explorer_stack = [episode - explorer_mean for episode in explorer_stack]
-    X = _zscore(np.concatenate(chaser_stack))
-    Y = _zscore(np.concatenate(explorer_stack))
+    X, _, _ = zscore_columns(
+        torch.from_numpy(np.concatenate(chaser_stack)),
+        correction=0,
+        epsilon=1e-12,
+        degenerate_to_one=True,
+    )
+    Y, _, _ = zscore_columns(
+        torch.from_numpy(np.concatenate(explorer_stack)),
+        correction=0,
+        epsilon=1e-12,
+        degenerate_to_one=True,
+    )
     n = X.shape[0]
 
-    cross = X.T @ Y / (n - 1)
-    U, S, Vt = np.linalg.svd(cross)
+    _, U, S_torch, V = cross_covariance_svd(X, Y)
+    S = S_torch.numpy()
 
-    offsets = np.cumsum([0, *lengths[:-1]])
     # Permutation singular values only feed percentile thresholds; float32
     # halves the matmul cost without affecting the real SVD above.
-    X32 = X.astype(np.float32)
-    blocks = [Y.astype(np.float32)[start : start + length] for start, length in zip(offsets, lengths, strict=True)]
+    X32 = X.float()
+    Y32 = Y.float()
     nulls: dict[str, PLSCNull] = {}
     for null_model in null_models:
-        rng = np.random.RandomState(seed)
-        permuted = np.zeros((permutations, S.shape[0]))
-        for p in range(permutations):
-            if null_model == "episode_shuffle":
-                order = rng.permutation(len(blocks))
-                shuffled = np.concatenate([blocks[index] for index in order])
-            elif null_model == "circular_shift":
-                shuffled = np.concatenate(
-                    [
-                        np.roll(
-                            block,
-                            int(rng.randint(min_shift, max(len(block) - min_shift, min_shift + 1))),
-                            axis=0,
-                        )
-                        for block in blocks
-                    ]
-                )
-            else:
-                raise ValueError(f"unknown null model: {null_model}")
-            permuted[p] = np.linalg.svd(X32.T @ shuffled / (n - 1), compute_uv=False)
-        thresholds = np.percentile(permuted, percentile, axis=0)
+        permuted = null_singular_values(
+            X32,
+            Y32,
+            null_model=null_model,
+            permutations=permutations,
+            seed=seed,
+            episode_lengths=lengths,
+            min_shift=min_shift,
+        )
+        thresholds = np.percentile(permuted.numpy().astype(np.float64), percentile, axis=0)
         significant = S > thresholds
         nulls[null_model] = PLSCNull(
             thresholds=[float(v) for v in thresholds],
@@ -184,10 +186,10 @@ def plsc_shared_dimensions(
             n_significant=int(significant.sum()),
         )
 
-    x_scores = X @ U[:, 0]
-    y_scores = Y @ Vt[0]
+    x_scores = (X @ U[:, 0]).numpy()
+    y_scores = (Y @ V[:, 0]).numpy()
     top_correlation = float(np.corrcoef(x_scores, y_scores)[0, 1])
-    return PLSCResult(
+    return SharedDimensionsResult(
         singular_values=[float(v) for v in S],
         nulls=nulls,
         n_significant=nulls[headline_null].n_significant,

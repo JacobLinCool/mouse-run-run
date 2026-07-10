@@ -5,25 +5,143 @@ Fig. 5/6 (claim C3). Given two agents' time-aligned RNN hidden states, it
 z-scores each unit, forms the cross-covariance matrix
 ``R = X_chaser^T X_explorer / (n - 1)``, and takes its SVD. The singular values
 measure shared-dimension strength; the left/right singular vectors are the two
-agents' shared bases. Significance comes from a temporal permutation (one
-agent's timepoints shuffled) that builds a per-rank null distribution.
+agents' shared bases. Significance comes from a permutation null — one of
+``temporal_permutation``, ``episode_shuffle``, or ``circular_shift`` (see
+``null_singular_values``) — that builds a per-rank singular-value distribution
+from re-paired data.
 
 The shared subspace is spanned by the significant singular vectors; the unique
 subspace is its orthogonal complement. Because the bases are orthonormal, an
 agent's variance (or a single hidden state's squared norm) splits exactly into
 shared and unique parts.
 
-Both ``scripts/analysis/analyze_shared_neural.py`` and the interactive viewer
-import from here so the method has a single definition.
+This module is the single home of the estimator core (``zscore_columns``,
+``cross_covariance``, ``cross_covariance_svd``, ``null_singular_values``).
+``compute_plsc`` below is the pooled-sample entry point with the
+temporal-permutation null, used by ``scripts/analysis/analyze_shared_neural.py``
+and the interactive viewer; ``mouse_run_run.analysis.plsc_shared_dimensions``
+is the per-episode entry point with the episode-based nulls, built on the same
+core.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 
 TOP_K = 20
+
+NULL_MODELS = ("temporal_permutation", "episode_shuffle", "circular_shift")
+
+
+def zscore_columns(
+    matrix: torch.Tensor,
+    *,
+    correction: int = 1,
+    epsilon: float = 1e-8,
+    degenerate_to_one: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Column-wise z-score of ``matrix`` (n, H); returns (zscored, mean, std).
+
+    ``correction`` is the std's Bessel correction (1 = sample std, the pooled
+    ``compute_plsc`` convention; 0 = population std, the per-episode
+    convention). Near-constant columns are handled by clamping the std to
+    ``epsilon`` by default, or — with ``degenerate_to_one`` — by replacing
+    sub-``epsilon`` stds with 1.0 so those columns map to exactly zero.
+    """
+    mean = matrix.mean(dim=0)
+    std = matrix.std(dim=0, correction=correction)
+    if degenerate_to_one:
+        std = torch.where(std < epsilon, torch.ones_like(std), std)
+    else:
+        std = std.clamp_min(epsilon)
+    return (matrix - mean) / std, mean, std
+
+
+def cross_covariance(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """``R = x^T y / (n - 1)`` for paired z-scored samples (n, Hx) and (n, Hy)."""
+    return (x.T @ y) / (x.shape[0] - 1)
+
+
+def cross_covariance_svd(
+    x: torch.Tensor,
+    y: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """SVD of the cross-covariance; returns ``(R, U, singular_values, V)``.
+
+    ``U`` (Hx, rank) and ``V`` (Hy, rank) hold the two agents' shared bases as
+    columns; ``rank = min(Hx, Hy)``.
+    """
+    cross = cross_covariance(x, y)
+    u, singular, vh = torch.linalg.svd(cross, full_matrices=False)
+    return cross, u, singular, vh.T
+
+
+def null_singular_values(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    null_model: str,
+    permutations: int,
+    seed: int,
+    episode_lengths: Sequence[int] | None = None,
+    min_shift: int = 10,
+) -> torch.Tensor:
+    """Permutation-null singular values, shape ``(permutations, rank)``.
+
+    - ``temporal_permutation``: shuffle ``y``'s pooled timepoints so the
+      moment-to-moment pairing is destroyed while each agent's marginals are
+      preserved. A fixed torch generator keeps the null reproducible.
+    - ``episode_shuffle``: re-pair whole episodes of ``y`` (requires
+      ``episode_lengths``). Both sides keep their within-episode temporal
+      structure aligned from t=0, so shared time-in-episode dynamics stay in
+      the null and only episode-specific interaction counts as shared.
+    - ``circular_shift``: roll each episode of ``y`` by a random offset of at
+      least ``min_shift`` steps, breaking all temporal correspondence
+      including time-locking.
+
+    The temporal null draws from ``torch.Generator`` and the episode nulls
+    from ``numpy.random.RandomState``; each permutation stream is unchanged
+    from the pre-merge per-caller implementations so existing analyses
+    reproduce exactly.
+    """
+    if null_model not in NULL_MODELS:
+        raise ValueError(f"unknown null model: {null_model}")
+    n = x.shape[0]
+    rank = min(x.shape[1], y.shape[1])
+    null = torch.empty(permutations, rank, dtype=x.dtype)
+    if null_model == "temporal_permutation":
+        generator = torch.Generator().manual_seed(seed)
+        for index in range(permutations):
+            perm = torch.randperm(n, generator=generator)
+            null[index] = torch.linalg.svdvals(cross_covariance(x, y[perm]))
+        return null
+    if episode_lengths is None:
+        raise ValueError(f"{null_model} null requires episode_lengths")
+    lengths = list(episode_lengths)
+    offsets = np.cumsum([0, *lengths[:-1]])
+    blocks = [y[start : start + length] for start, length in zip(offsets, lengths, strict=True)]
+    rng = np.random.RandomState(seed)
+    for p in range(permutations):
+        if null_model == "episode_shuffle":
+            order = rng.permutation(len(blocks))
+            shuffled = torch.cat([blocks[index] for index in order])
+        else:
+            shuffled = torch.cat(
+                [
+                    torch.roll(
+                        block,
+                        int(rng.randint(min_shift, max(len(block) - min_shift, min_shift + 1))),
+                        dims=0,
+                    )
+                    for block in blocks
+                ]
+            )
+        null[p] = torch.linalg.svdvals(cross_covariance(x, shuffled))
+    return null
 
 
 @dataclass(frozen=True)
@@ -61,17 +179,10 @@ def compute_plsc(
     """Run PLSC on pooled paired samples ``chaser`` and ``explorer`` (n, H)."""
     chaser = chaser.float()
     explorer = explorer.float()
-    chaser_mean = chaser.mean(dim=0)
-    chaser_std = chaser.std(dim=0).clamp_min(1e-8)
-    explorer_mean = explorer.mean(dim=0)
-    explorer_std = explorer.std(dim=0).clamp_min(1e-8)
-    xc = (chaser - chaser_mean) / chaser_std
-    xe = (explorer - explorer_mean) / explorer_std
-    n = xc.shape[0]
+    xc, chaser_mean, chaser_std = zscore_columns(chaser)
+    xe, explorer_mean, explorer_std = zscore_columns(explorer)
 
-    cross = (xc.T @ xe) / (n - 1)
-    u, singular, vh = torch.linalg.svd(cross, full_matrices=False)
-    v = vh.T
+    cross, u, singular, v = cross_covariance_svd(xc, xe)
     latent_c = xc @ u
     latent_e = xe @ v
     rank = singular.shape[0]
@@ -81,15 +192,13 @@ def compute_plsc(
     )
     covariance_explained = singular.square() / singular.square().sum().clamp_min(1e-12)
 
-    # Temporal permutation: shuffle the explorer's timepoints so the moment-to-
-    # moment pairing is destroyed while each agent's marginals are preserved. A
-    # fixed generator keeps the null reproducible.
-    generator = torch.Generator().manual_seed(seed)
-    null = torch.empty(permutations, rank)
-    for index in range(permutations):
-        perm = torch.randperm(n, generator=generator)
-        cross_perm = (xc.T @ xe[perm]) / (n - 1)
-        null[index] = torch.linalg.svdvals(cross_perm)
+    null = null_singular_values(
+        xc,
+        xe,
+        null_model="temporal_permutation",
+        permutations=permutations,
+        seed=seed,
+    )
 
     null_percentile = torch.quantile(null, 1.0 - alpha, dim=0)
     significant = singular > null_percentile
@@ -160,12 +269,6 @@ def project_norms(
     shared_norm = coords.norm(dim=1)
     unique_norm = (total_norm.square() - shared_norm.square()).clamp_min(0.0).sqrt()
     return shared_norm, unique_norm
-
-
-def zscore(matrix: torch.Tensor) -> torch.Tensor:
-    mean = matrix.mean(dim=0, keepdim=True)
-    std = matrix.std(dim=0, keepdim=True).clamp_min(1e-8)
-    return (matrix - mean) / std
 
 
 def pearson(a: torch.Tensor, b: torch.Tensor) -> float:

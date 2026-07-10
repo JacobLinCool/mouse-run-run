@@ -378,7 +378,10 @@ def compute_shared_subspace(
             " looks significant. Increase episodes/steps or use a"
             " longer-horizon checkpoint (the paper uses 25 x 500)."
         )
-    if int(valid.sum()) < episodes:
+    if int(degenerate.sum()) > 0:
+        # Checked against the degenerate count, not the used count: when every
+        # pooled episode is degenerate they are all kept (valid is reset above)
+        # and the warning must still fire.
         warnings.append(
             f"{int(degenerate.sum())} of {episodes} pooled episodes were"
             " degenerate."
