@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import statistics as st
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,10 +25,9 @@ from mouse_run_run.analysis import (
     random_variance_basis,
     shared_dimension_basis,
 )
-from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
-from mouse_run_run.policy import build_policy
+from mouse_run_run.checkpoint_loading import load_policy_pair
+from mouse_run_run.env import BatchedChaseEnv
 from mouse_run_run.provenance import collect_provenance, write_json_atomic
-from mouse_run_run.serialization import load_checkpoint
 from mouse_run_run.training_config import select_device
 
 
@@ -47,15 +45,10 @@ def perturbed_eval(
     its action head. projection is the (H, k) removed basis, or None for the
     unperturbed control."""
     torch.manual_seed(seed)
-    config, _, chaser_state, explorer_state = load_checkpoint(checkpoint)
-    env_config = replace(GridWorldConfig(**config["env"]), max_steps=max_steps)
-    arch = config.get("architecture", "rnn")
-    chaser = build_policy(arch, env_config.observation_size, hidden_size=config["hidden_size"]).to(device)
-    explorer = build_policy(arch, env_config.observation_size, hidden_size=config["hidden_size"]).to(device)
-    chaser.load_state_dict(chaser_state)
-    explorer.load_state_dict(explorer_state)
-    chaser.eval()
-    explorer.eval()
+    pair = load_policy_pair(checkpoint, device=device, max_steps=max_steps)
+    env_config = pair.env_config
+    chaser = pair.chaser
+    explorer = pair.explorer
 
     P = projection.to(device) if projection is not None else None
 

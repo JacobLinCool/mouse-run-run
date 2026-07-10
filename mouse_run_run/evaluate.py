@@ -1,14 +1,14 @@
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import torch
 from torch.distributions import Categorical
 
+from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
-from mouse_run_run.policy import PolicyBase, build_policy
-from mouse_run_run.serialization import load_checkpoint
+from mouse_run_run.policy import PolicyBase
 from mouse_run_run.training_config import select_device
 
 
@@ -52,26 +52,10 @@ def evaluate_checkpoint(
     if seed is not None:
         torch.manual_seed(seed)
     device = select_device(device_name)
-    config, _, chaser_state, explorer_state = load_checkpoint(checkpoint)
-    env_config = GridWorldConfig(**config["env"])
-    if max_steps is not None:
-        env_config = replace(env_config, max_steps=max_steps)
-
-    architecture = config.get("architecture", "rnn")
-    chaser = build_policy(
-        architecture,
-        env_config.observation_size,
-        hidden_size=config["hidden_size"],
-    ).to(device)
-    explorer = build_policy(
-        architecture,
-        env_config.observation_size,
-        hidden_size=config["hidden_size"],
-    ).to(device)
-    chaser.load_state_dict(chaser_state)
-    explorer.load_state_dict(explorer_state)
-    chaser.eval()
-    explorer.eval()
+    pair = load_policy_pair(checkpoint, device=device, max_steps=max_steps)
+    env_config = pair.env_config
+    chaser = pair.chaser
+    explorer = pair.explorer
 
     totals = {
         "collisions_per_episode": 0.0,

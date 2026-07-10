@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,11 +23,9 @@ import numpy as np
 import torch
 
 from mouse_run_run.analysis import chaser_action_weight, partner_representation
-from mouse_run_run.env import GridWorldConfig
-from mouse_run_run.policy import build_policy
+from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.provenance import collect_provenance, write_json_atomic
 from mouse_run_run.rollout import collect_batch
-from mouse_run_run.serialization import load_checkpoint
 from mouse_run_run.training_config import select_device
 
 
@@ -42,19 +39,13 @@ def measure_checkpoint(
     seed: int,
 ) -> dict[str, float]:
     torch.manual_seed(seed)
-    config, _, chaser_state, explorer_state = load_checkpoint(checkpoint)
-    env_config = replace(GridWorldConfig(**config["env"]), max_steps=max_steps)
-    chaser = build_policy(config.get("architecture", "rnn"), env_config.observation_size, hidden_size=config["hidden_size"]).to(device)
-    explorer = build_policy(config.get("architecture", "rnn"), env_config.observation_size, hidden_size=config["hidden_size"]).to(device)
-    chaser.load_state_dict(chaser_state)
-    explorer.load_state_dict(explorer_state)
-    chaser.eval()
-    explorer.eval()
+    pair = load_policy_pair(checkpoint, device=device, max_steps=max_steps)
+    env_config = pair.env_config
     tensors = collect_batch(
         env_config=env_config,
         batch_size=episodes,
-        chaser=chaser,
-        explorer=explorer,
+        chaser=pair.chaser,
+        explorer=pair.explorer,
         device=device,
         deterministic=False,
         opponent_mode="self_play",

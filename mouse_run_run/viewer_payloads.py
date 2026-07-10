@@ -4,20 +4,19 @@ import base64
 import json
 import math
 import time
-from dataclasses import replace
 from pathlib import Path
 
 import torch
 from safetensors import SafetensorError
 from torch.nn import functional as F
 
+from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.degenerate import episode_degeneracy
-from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
+from mouse_run_run.env import BatchedChaseEnv
 from mouse_run_run.evaluate import OpponentMode
 from mouse_run_run.plsc import compute_plsc, project_norms, shared_variance_fraction
-from mouse_run_run.policy import build_policy
 from mouse_run_run.rollout import collect_batch
-from mouse_run_run.serialization import CHECKPOINT_FORMAT, load_checkpoint, read_metadata
+from mouse_run_run.serialization import CHECKPOINT_FORMAT, read_metadata
 from mouse_run_run.training_config import select_device
 
 
@@ -313,22 +312,11 @@ def compute_shared_subspace(
     """
     torch.manual_seed(seed)
     device = select_device(device_name)
-    config, _, chaser_state, explorer_state = load_checkpoint(checkpoint)
-    env_config = GridWorldConfig(**config["env"])
-    if max_steps is not None:
-        env_config = replace(env_config, max_steps=max_steps)
-
-    architecture = config.get("architecture", "rnn")
-    chaser = build_policy(
-        architecture, env_config.observation_size, hidden_size=config["hidden_size"]
-    ).to(device)
-    explorer = build_policy(
-        architecture, env_config.observation_size, hidden_size=config["hidden_size"]
-    ).to(device)
-    chaser.load_state_dict(chaser_state)
-    explorer.load_state_dict(explorer_state)
-    chaser.eval()
-    explorer.eval()
+    pair = load_policy_pair(checkpoint, device=device, max_steps=max_steps)
+    config = pair.config
+    env_config = pair.env_config
+    chaser = pair.chaser
+    explorer = pair.explorer
 
     batch = collect_batch(
         env_config=env_config,
@@ -486,24 +474,12 @@ def generate_trajectory(
 ) -> dict[str, object]:
     torch.manual_seed(episode_seed)
     device = select_device(device_name)
-    config, checkpoint_metrics, chaser_state, explorer_state = load_checkpoint(checkpoint)
-    env_config = GridWorldConfig(**config["env"])
-
-    architecture = config.get("architecture", "rnn")
-    chaser = build_policy(
-        architecture,
-        env_config.observation_size,
-        hidden_size=config["hidden_size"],
-    ).to(device)
-    explorer = build_policy(
-        architecture,
-        env_config.observation_size,
-        hidden_size=config["hidden_size"],
-    ).to(device)
-    chaser.load_state_dict(chaser_state)
-    explorer.load_state_dict(explorer_state)
-    chaser.eval()
-    explorer.eval()
+    pair = load_policy_pair(checkpoint, device=device)
+    config = pair.config
+    checkpoint_metrics = pair.metrics
+    env_config = pair.env_config
+    chaser = pair.chaser
+    explorer = pair.explorer
 
     env = BatchedChaseEnv(env_config, batch_size=1, device=device)
     chaser_observation, explorer_observation = env.reset()

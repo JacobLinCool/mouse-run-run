@@ -1,16 +1,17 @@
 import shlex
 import sys
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 
 import torch
 from torch.distributions import Categorical
 
+from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
 from mouse_run_run.evaluate import OpponentMode
-from mouse_run_run.policy import PolicyBase, build_policy
-from mouse_run_run.serialization import load_checkpoint, save_rollout
+from mouse_run_run.policy import PolicyBase
+from mouse_run_run.serialization import save_rollout
 from mouse_run_run.training_config import select_device
 
 
@@ -45,26 +46,11 @@ def collect_rollouts(
     if seed is not None:
         torch.manual_seed(seed)
     device = select_device(device_name)
-    config, _, chaser_state, explorer_state = load_checkpoint(checkpoint)
-    env_config = GridWorldConfig(**config["env"])
-    if max_steps is not None:
-        env_config = replace(env_config, max_steps=max_steps)
-
-    architecture = config.get("architecture", "rnn")
-    chaser = build_policy(
-        architecture,
-        env_config.observation_size,
-        hidden_size=config["hidden_size"],
-    ).to(device)
-    explorer = build_policy(
-        architecture,
-        env_config.observation_size,
-        hidden_size=config["hidden_size"],
-    ).to(device)
-    chaser.load_state_dict(chaser_state)
-    explorer.load_state_dict(explorer_state)
-    chaser.eval()
-    explorer.eval()
+    pair = load_policy_pair(checkpoint, device=device, max_steps=max_steps)
+    config = pair.config
+    env_config = pair.env_config
+    chaser = pair.chaser
+    explorer = pair.explorer
 
     chunks = []
     completed = 0

@@ -1,8 +1,10 @@
 from dataclasses import asdict
 
+import pytest
 import torch
 
 from mouse_run_run.analysis import load_rollout
+from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import GridWorldConfig
 from mouse_run_run.plsc import compute_plsc
@@ -81,6 +83,56 @@ def test_checkpoint_and_rollout_round_trip(tmp_path) -> None:
     assert rollout_metadata["schema_version"] == 3
     assert tensors["episode_degenerate"].tolist() == [False, True]
     assert tensors["chaser_hidden"].shape == (2, 2, 3)
+
+
+def test_load_policy_pair_rebuilds_eval_policies(tmp_path) -> None:
+    torch.manual_seed(0)
+    config = GridWorldConfig(max_steps=5)
+    chaser = build_policy("rnn", config.observation_size, hidden_size=8)
+    explorer = build_policy("rnn", config.observation_size, hidden_size=8)
+    checkpoint = tmp_path / "checkpoint.safetensors"
+    save_checkpoint(
+        checkpoint,
+        config={
+            "env": asdict(config),
+            "architecture": "rnn",
+            "hidden_size": 8,
+            "rnn_initialization": "pytorch_default",
+        },
+        metrics={"collisions_per_episode": 1.5},
+        chaser_state=chaser.state_dict(),
+        explorer_state=explorer.state_dict(),
+    )
+
+    pair = load_policy_pair(checkpoint, device=torch.device("cpu"), max_steps=3)
+
+    assert pair.env_config.max_steps == 3
+    assert pair.metrics == {"collisions_per_episode": 1.5}
+    assert not pair.chaser.training
+    assert not pair.explorer.training
+    assert torch.equal(pair.chaser.rnn.weight_hh_l0, chaser.rnn.weight_hh_l0)
+    assert torch.equal(pair.explorer.rnn.weight_hh_l0, explorer.rnn.weight_hh_l0)
+
+
+def test_load_policy_pair_missing_hidden_size_names_checkpoint(tmp_path) -> None:
+    torch.manual_seed(0)
+    config = GridWorldConfig(max_steps=5)
+    chaser = build_policy("rnn", config.observation_size, hidden_size=8)
+    explorer = build_policy("rnn", config.observation_size, hidden_size=8)
+    checkpoint = tmp_path / "checkpoint.safetensors"
+    save_checkpoint(
+        checkpoint,
+        config={"env": asdict(config), "architecture": "rnn"},
+        metrics={},
+        chaser_state=chaser.state_dict(),
+        explorer_state=explorer.state_dict(),
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        load_policy_pair(checkpoint, device=torch.device("cpu"))
+
+    assert "hidden_size" in str(excinfo.value)
+    assert str(checkpoint) in str(excinfo.value)
 
 
 def test_episode_degeneracy_detects_sustained_stuck_run() -> None:
