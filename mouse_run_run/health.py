@@ -29,6 +29,21 @@ class CheckpointHealth:
     max_abs: float
     failures: tuple[dict[str, Any], ...]
 
+    def to_dict(self, *, include_path: bool = True) -> dict[str, Any]:
+        """JSON-ready rendering shared by evidence records and run reports."""
+        payload: dict[str, Any] = {"path": self.path} if include_path else {}
+        payload.update(
+            {
+                "ok": self.ok,
+                "format_ok": self.format_ok,
+                "tensor_count": self.tensor_count,
+                "nonfinite_tensor_count": self.nonfinite_tensor_count,
+                "max_abs": self.max_abs,
+                "failures": list(self.failures),
+            }
+        )
+        return payload
+
 
 def assert_finite_scalar(value: float, *, location: str, name: str) -> None:
     if not math.isfinite(float(value)):

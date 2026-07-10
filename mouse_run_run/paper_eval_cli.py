@@ -12,7 +12,7 @@ from safetensors import SafetensorError
 
 from mouse_run_run.checkpoint_select import checkpoint_identity, select_checkpoints
 from mouse_run_run.evaluate import evaluate_checkpoint
-from mouse_run_run.health import checkpoint_health
+from mouse_run_run.health import CheckpointHealth, checkpoint_health
 from mouse_run_run.serialization import read_checkpoint_metadata
 from mouse_run_run.training_config import DEVICE_CHOICES
 
@@ -179,7 +179,7 @@ def _base_record(
     checkpoint: Path,
     args: argparse.Namespace,
     opponent_mode: str,
-    checkpoint_health: object,
+    checkpoint_health: CheckpointHealth,
     status: str,
     checkpoint_config: dict[str, object] | None = None,
     checkpoint_metrics: dict[str, object] | None = None,
@@ -195,14 +195,7 @@ def _base_record(
         **checkpoint_identity(checkpoint_config),
         "checkpoint_config": checkpoint_config,
         "checkpoint_metrics": checkpoint_metrics,
-        "checkpoint_health": {
-            "ok": checkpoint_health.ok,
-            "format_ok": checkpoint_health.format_ok,
-            "tensor_count": checkpoint_health.tensor_count,
-            "nonfinite_tensor_count": checkpoint_health.nonfinite_tensor_count,
-            "max_abs": checkpoint_health.max_abs,
-            "failures": list(checkpoint_health.failures),
-        },
+        "checkpoint_health": checkpoint_health.to_dict(include_path=False),
         "status": status,
         "error": error,
         "episodes": args.episodes,

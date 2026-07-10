@@ -21,18 +21,7 @@ def main() -> None:
         "schema_version": 1,
         "checkpoint_count": len(records),
         "healthy_checkpoint_count": sum(1 for record in records if record.ok),
-        "records": [
-            {
-                "path": record.path,
-                "ok": record.ok,
-                "format_ok": record.format_ok,
-                "tensor_count": record.tensor_count,
-                "nonfinite_tensor_count": record.nonfinite_tensor_count,
-                "max_abs": record.max_abs,
-                "failures": list(record.failures),
-            }
-            for record in records
-        ],
+        "records": [record.to_dict() for record in records],
     }
     if args.json_output:
         args.json_output.parent.mkdir(parents=True, exist_ok=True)

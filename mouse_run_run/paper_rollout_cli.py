@@ -93,7 +93,7 @@ def main() -> None:
                     "checkpoint": str(checkpoint),
                     **identity,
                     "output": str(output),
-                    "checkpoint_health": _health_dict(health),
+                    "checkpoint_health": health.to_dict(include_path=False),
                     "error": "checkpoint failed finite/format validation",
                 },
             )
@@ -130,7 +130,7 @@ def main() -> None:
                 "checkpoint": str(checkpoint),
                 **identity,
                 "output": str(output),
-                "checkpoint_health": _health_dict(health),
+                "checkpoint_health": health.to_dict(include_path=False),
                 "episodes": args.episodes,
                 "max_steps": args.max_steps,
                 "batch_size": args.batch_size,
@@ -175,17 +175,6 @@ def _output_stem(path: Path) -> str:
     readable = "__".join(parts[-6:]).replace(" ", "_")
     digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:10]
     return f"{readable}__{digest}"
-
-
-def _health_dict(health: object) -> dict[str, object]:
-    return {
-        "ok": health.ok,
-        "format_ok": health.format_ok,
-        "tensor_count": health.tensor_count,
-        "nonfinite_tensor_count": health.nonfinite_tensor_count,
-        "max_abs": health.max_abs,
-        "failures": list(health.failures),
-    }
 
 
 if __name__ == "__main__":
