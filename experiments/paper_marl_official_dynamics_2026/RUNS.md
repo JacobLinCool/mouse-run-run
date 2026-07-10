@@ -66,3 +66,19 @@
   snapshots, virtual environments, checkpoints, TensorBoard files, per-worker
   artifacts, GPU telemetry traces, local smoke runs, and temporary checkpoints
   were deleted to avoid contaminating later experiments.
+
+## Evaluation RNG isolation — 2026-07-10
+
+- `checkpoint_loading.load_policy_pair` now rebuilds policies inside
+  `torch.random.fork_rng`, so loading a checkpoint no longer consumes the
+  caller's seeded RNG stream (previously the constructor's initialization
+  draws — a count that varied with `rnn_initialization` — shifted every
+  subsequent stochastic sample).
+- Consequence for evidence comparability: same-seed stochastic evaluation and
+  analysis numbers produced BEFORE this change (which included the
+  construction draws in the stream) are statistically equivalent but not
+  value-identical to re-runs. Deterministic quantities (loaded weights,
+  checkpoint health, PLSC estimator values) are unaffected.
+- This matters for this experiment in particular because its
+  `official_code`-preset checkpoints record `rnn_initialization =
+  pytorch_default`, the case whose draw count differed.

@@ -110,6 +110,42 @@
       .comparison-group p { margin: 7px 0 0; font-size: 12.5px; }
       .source-links a { color: var(--explorer); }
       .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: #eef0ea; font-size: 12px; color: var(--muted); }
+      .atlas-intro { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: start; margin-bottom: 16px; }
+      .atlas-intro p { margin: 0; }
+      .atlas-meta { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
+      .stat-chip { display: inline-flex; align-items: baseline; gap: 5px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; background: #fbfbf8; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+      .stat-chip strong { color: var(--ink); font-size: 12.5px; }
+      .atlas-block { margin-top: 24px; }
+      .atlas-block:first-of-type { margin-top: 0; }
+      .atlas-block > h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 4px; font-size: 15px; }
+      .atlas-block > h3 span { color: var(--muted); font-size: 12px; font-weight: 500; }
+      .atlas-block > p { margin: 0 0 10px; color: var(--muted); font-size: 12.5px; }
+      .viz-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+      .viz-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .viz-panel { min-width: 0; padding: 11px 12px 9px; border: 1px solid var(--line); border-radius: 8px; background: #fcfcfa; }
+      .viz-panel.wide { grid-column: 1 / -1; }
+      .viz-title { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 5px; font-weight: 680; font-size: 12.5px; }
+      .viz-title span { color: var(--muted); font-weight: 500; font-size: 11px; white-space: nowrap; }
+      .viz-panel svg { display: block; width: 100%; height: auto; overflow: visible; }
+      .viz-values { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 5px; color: var(--muted); font-size: 10.5px; }
+      .viz-values strong { color: var(--ink); }
+      .viz-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 8px 0 0; color: var(--muted); font-size: 11px; }
+      .viz-legend span { display: inline-flex; align-items: center; gap: 5px; }
+      .legend-mark { width: 12px; height: 4px; border-radius: 3px; background: var(--rnn); }
+      .legend-mark.paper { height: 2px; background: #6d7478; }
+      .legend-mark.control { background: #aeb4b1; }
+      .legend-mark.shared { background: var(--explorer); }
+      .legend-mark.random { background: #89908c; }
+      .atlas-warning { margin: 12px 0 0; padding: 9px 12px; border-left: 3px solid var(--amber); border-radius: 6px; background: #fbf5e9; color: #675126; font-size: 12.5px; }
+      .atlas-sources { margin-top: 14px; color: var(--muted); font-size: 11.5px; }
+      .atlas-sources summary { cursor: pointer; color: var(--explorer); font-weight: 650; }
+      .atlas-sources code { overflow-wrap: anywhere; }
+      @media (max-width: 900px) { .viz-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (max-width: 640px) {
+        .atlas-intro { grid-template-columns: 1fr; }
+        .atlas-meta { justify-content: flex-start; }
+        .viz-grid, .viz-grid.two { grid-template-columns: 1fr; }
+      }
       .err { color: var(--danger); padding: 20px; }
     </style>
   </head>
@@ -147,6 +183,7 @@
         main.innerHTML = "";
         main.appendChild(overview(data));
         if (data.paper_reference) main.appendChild(originalPaperSection(data));
+        if (data.rnn_social_example) main.appendChild(rnnSocialExampleSection(data.rnn_social_example, data.paper_reference));
         if (data.claim_alignment) main.appendChild(claimSection(data.claim_alignment));
         main.appendChild(behaviorSection(data));
         main.appendChild(neuralSection(data));
@@ -329,6 +366,261 @@
 
             <p class="source-links muted" style="font-size:12px;margin:18px 0 0">Sources: <a href="${paper.article.doi}" target="_blank" rel="noreferrer">Nature article</a> &middot; <a href="${paper.article.fig5_source_data}" target="_blank" rel="noreferrer">Fig. 5 source data</a> &middot; <a href="${paper.article.fig6_source_data}" target="_blank" rel="noreferrer">Fig. 6 source data</a>.</p>
           </div></section>`);
+      }
+
+      // Paper-aligned visual atlas for one deliberately selected RNN/social
+      // checkpoint. The selection is explicitly post hoc and the population
+      // tables above remain the basis for inference.
+      function rnnSocialExampleSection(example, paper) {
+        const paperBehavior = new Map((paper && paper.behavior_at_iteration_20000 || []).map((v) => [v.key, v]));
+        const behaviorPanels = [
+          ["chaser_collisions", "chaser_collisions"],
+          ["chaser_partner_vision", "chaser_partner_vision_percent"],
+          ["chaser_average_distance", "chaser_average_distance"],
+          ["chaser_new_fields", "chaser_new_fields"],
+          ["explorer_new_fields", "explorer_new_fields"],
+          ["explorer_average_distance", "explorer_average_distance"],
+        ].map(([paperKey, exampleKey]) => {
+          const reference = paperBehavior.get(paperKey);
+          return reference ? dotWhiskerPanel(reference, example.behavior[exampleKey]) : "";
+        }).join("");
+
+        const selfPlay = example.protocols.self_play;
+        const behaviorProtocol = example.protocols.behavior;
+        const c3 = example.plsc;
+        const sources = Object.entries(example.sources || {})
+          .map(([name, path]) => `<div><strong>${esc(name)}</strong>: <code>${esc(path)}</code></div>`)
+          .join("");
+        const randomExplorerDegenerate = Number(example.behavior.random_explorer_degenerate_fraction) * 100;
+        const randomChaserDegenerate = Number(example.behavior.random_chaser_degenerate_fraction) * 100;
+        const paperSig = paper && paper.shared_dimensions && paper.shared_dimensions.significant_dimension_count.paper_social;
+        const paperPcc = paper && paper.shared_dimensions && paper.shared_dimensions.delta_pcc.paper_social;
+
+        return el(`<section class="card"><h2>Paper-style analysis atlas <small>one illustrative RNN social checkpoint</small></h2>
+          <div class="card-body">
+            <div class="atlas-intro">
+              <p class="callout"><strong>How to read this atlas.</strong> The red marks are our RNN social seed ${example.seed}; gray marks summarize the original paper. This checkpoint was chosen <strong>after seeing the results</strong> to provide a clear visual example, so the panels explain the analyses but do not constitute an independent statistical replication.</p>
+              <div class="atlas-meta">
+                <span class="stat-chip">architecture <strong>${example.architecture}</strong></span>
+                <span class="stat-chip">task <strong>social</strong></span>
+                <span class="stat-chip">seed <strong>${example.seed}</strong></span>
+                <span class="stat-chip">update <strong>${Number(example.update).toLocaleString()}</strong></span>
+                <span class="stat-chip">display sample <strong>n = 1</strong></span>
+              </div>
+            </div>
+
+            <div class="atlas-block">
+              <h3>C1 &mdash; learned social behavior <span>paper Fig. 5i&ndash;n</span></h3>
+              <p>Each small panel preserves its own physical unit. Paper points show mean &plusmn; SD across 10 seeds; the diamond is this single checkpoint under the matching random-opponent role test.</p>
+              <div class="viz-grid">${behaviorPanels}</div>
+              <div class="viz-legend"><span><i class="legend-mark"></i>paper social mean &plusmn; SD</span><span><i class="legend-mark paper"></i>paper non-social mean &plusmn; SD</span><span><i class="legend-mark" style="height:8px;width:8px;transform:rotate(45deg);border-radius:1px;background:#8f1d14"></i>our seed ${example.seed}</span></div>
+            </div>
+
+            <div class="atlas-block">
+              <h3>C2 &mdash; can hidden activity predict social events? <span>paper Fig. 6b&ndash;e</span></h3>
+              <p>Balanced accuracy is 0.50 at chance. The strong gap between the observed labels and within-recording shuffled labels means a simple linear readout can recover collision and partner-motion events from both agents' hidden states.</p>
+              <div class="viz-grid two"><div class="viz-panel wide"><div class="viz-title">Linear event decoding <span>balanced accuracy</span></div>${decoderChart(example.decoding, paper && paper.decoding || [])}</div></div>
+              <div class="viz-legend"><span><i class="legend-mark"></i>our observed labels</span><span><i class="legend-mark control"></i>our shuffled labels</span><span><i class="legend-mark paper"></i>paper social mean &plusmn; SD</span></div>
+            </div>
+
+            <div class="atlas-block">
+              <h3>C3 &mdash; cross-agent shared structure <span>paper Fig. 6g&ndash;h</span></h3>
+              <p>The solid spectrum is the measured chaser&ndash;explorer cross-covariance; the dashed curve is the 95% episode-shuffle threshold. A dimension counts as shared when its measured value clears that episode-level null.</p>
+              <div class="viz-grid two">
+                <div class="viz-panel wide"><div class="viz-title">Leading shared-dimension spectrum <span>log scale; first 16 of 256</span></div>${spectrumChart(c3)}</div>
+              </div>
+              <div class="atlas-meta" style="justify-content:flex-start;margin-top:9px">
+                <span class="stat-chip">significant dimensions <strong>${c3.n_significant} / 256</strong></span>
+                <span class="stat-chip">top shared-dimension <em>r</em> <strong>${numberText(c3.top_dim_correlation, 3)}</strong></span>
+                ${paperSig ? `<span class="stat-chip">paper significant dimensions <strong>${numberText(paperSig.mean, 1)} &plusmn; ${numberText(paperSig.sd, 1)}</strong></span>` : ""}
+                ${paperPcc ? `<span class="stat-chip">paper &Delta;PCC <strong>${numberText(paperPcc.mean, 3)} &plusmn; ${numberText(paperPcc.sd, 3)}</strong></span>` : ""}
+              </div>
+              <p style="margin-top:8px">The last two values are contextual, not interchangeable: the paper reports late-checkpoint, chance-subtracted PCC, whereas our panel uses final-checkpoint PLSC and its episode-shuffle null.</p>
+            </div>
+
+            <div class="atlas-block">
+              <h3>C4 &mdash; partner representation over learning <span>paper Fig. 6p&ndash;r</span></h3>
+              <p>“Partner-unique” is the fraction of hidden-state variance explained specifically by the other agent's state after accounting for the focal agent's own state. The left panel follows one seed; the right panel shows the same seven checkpoints against self-play collisions.</p>
+              <div class="viz-grid two">
+                <div class="viz-panel"><div class="viz-title">Partner-unique variance over updates <span>% hidden variance</span></div>${partnerTrendChart(example.partner_representation.trend, paper && paper.partner_representation)}</div>
+                <div class="viz-panel"><div class="viz-title">Representation vs performance <span>n = ${example.partner_representation.trend.length} checkpoints</span></div>${partnerCollisionScatter(example.partner_representation.trend)}</div>
+              </div>
+              <div class="viz-legend"><span><i class="legend-mark"></i>our seed ${example.seed} trajectory</span><span><i class="legend-mark paper"></i>paper social early&ndash;late means</span></div>
+              <p style="margin-top:8px">Our first saved point is update 1,000; the paper's “early” point is untrained iteration 0. The seed-level path is non-monotonic and should not be read as the paper's across-unit correlation.</p>
+            </div>
+
+            <div class="atlas-block">
+              <h3>C5 &mdash; perturbing the shared subspace <span>paper Fig. 6s&ndash;u</span></h3>
+              <p>Bars show this checkpoint after removing either its leading shared dimensions or an equal-size random basis. Paper means &plusmn; SD are overlaid as gray diamonds, preserving each panel's original behavioral unit.</p>
+              <div class="viz-grid">${perturbationPanels(example.perturbation, paper && paper.perturbation || [])}</div>
+              <div class="viz-legend"><span><i class="legend-mark"></i>unperturbed</span><span><i class="legend-mark shared"></i>shared removed</span><span><i class="legend-mark random"></i>random removed</span><span><i class="legend-mark paper"></i>paper mean &plusmn; SD</span></div>
+              <div class="atlas-warning"><strong>Control result:</strong> for this checkpoint, random-basis removal is more disruptive than shared-subspace removal (collisions fall to ${numberText(example.perturbation.conditions.random_removed.collisions_per_episode, 2)} versus ${numberText(example.perturbation.conditions.shared_removed.collisions_per_episode, 2)}). This visualization therefore does not establish a selective causal role for the shared subspace.</div>
+            </div>
+
+            <div class="atlas-warning"><strong>Protocol limitation.</strong> The Fig. 6 self-play analysis retained ${selfPlay.valid_episodes}/${selfPlay.episodes} non-degenerate episodes of ${selfPlay.max_steps} steps. The separate ${behaviorProtocol.episodes} &times; ${behaviorProtocol.max_steps}-step random-opponent tests flagged ${numberText(randomExplorerDegenerate, 0)}% (random explorer) and ${numberText(randomChaserDegenerate, 0)}% (random chaser) as degenerate under the 1% movement rule. The visual example is useful for mechanism-level explanation, while population-level claims should continue to use the full cross-seed tables.</div>
+
+            <details class="atlas-sources"><summary>Selection rule and source artifacts</summary>
+              <p><strong>Post-hoc rule:</strong> ${esc(example.selection.rule)} The rule retained ${example.selection.eligible_count}/${example.selection.candidate_count} RNN social checkpoints (eligible seeds: ${example.selection.eligible_seeds.join(", ")}).</p>
+              ${sources}
+            </details>
+          </div></section>`);
+      }
+
+      function numberText(value, digits = 2) {
+        return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
+      }
+
+      function diamond(x, y, radius, color) {
+        return `<path d="M ${x} ${y - radius} L ${x + radius} ${y} L ${x} ${y + radius} L ${x - radius} ${y} Z" fill="${color}"/>`;
+      }
+
+      function dotWhiskerPanel(reference, ours) {
+        const social = reference.paper_social;
+        const nonSocial = reference.paper_non_social;
+        const values = [social.mean + social.sd, nonSocial.mean + nonSocial.sd, Number(ours)];
+        const axisMax = Math.max(...values, 1) * 1.12;
+        const x0 = 86, x1 = 326, width = x1 - x0;
+        const x = (v) => x0 + Math.max(0, Number(v)) / axisMax * width;
+        const rows = [
+          ["paper S", social, "#d84f45", 38],
+          ["paper NS", nonSocial, "#6d7478", 73],
+        ];
+        const marks = rows.map(([label, stat, color, y]) => {
+          const lo = Math.max(0, stat.mean - stat.sd), hi = stat.mean + stat.sd;
+          return `<text x="4" y="${y + 4}" font-size="10" fill="#697177">${label}</text>
+            <line x1="${x(lo)}" x2="${x(hi)}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="2"/>
+            <line x1="${x(lo)}" x2="${x(lo)}" y1="${y - 5}" y2="${y + 5}" stroke="${color}"/>
+            <line x1="${x(hi)}" x2="${x(hi)}" y1="${y - 5}" y2="${y + 5}" stroke="${color}"/>
+            <circle cx="${x(stat.mean)}" cy="${y}" r="4" fill="${color}"><title>${label}: ${numberText(stat.mean)} ± ${numberText(stat.sd)}</title></circle>`;
+        }).join("");
+        const ticks = [0, axisMax / 2, axisMax].map((v) => `<line x1="${x(v)}" x2="${x(v)}" y1="19" y2="116" stroke="#e5e7df"/><text x="${x(v)}" y="134" text-anchor="middle" font-size="9" fill="#697177">${numberText(v, axisMax < 2 ? 2 : 1)}</text>`).join("");
+        return `<div class="viz-panel"><div class="viz-title">${esc(reference.label)} <span>${esc(reference.panel)}</span></div>
+          <svg viewBox="0 0 340 142" role="img" aria-label="${esc(reference.label)}: paper social and non-social means with this checkpoint">
+            ${ticks}${marks}
+            <text x="4" y="112" font-size="10" fill="#202426" font-weight="650">our RNN</text>${diamond(x(ours), 108, 5, "#8f1d14")}
+          </svg>
+          <div class="viz-values"><span>paper S <strong>${numberText(social.mean)} &plusmn; ${numberText(social.sd)}</strong></span><span>paper NS <strong>${numberText(nonSocial.mean)} &plusmn; ${numberText(nonSocial.sd)}</strong></span><span>ours <strong>${numberText(ours)}</strong></span></div></div>`;
+      }
+
+      function decoderChart(decoders, paperDecoders) {
+        const width = 820, height = 270, left = 48, right = 18, top = 16, bottom = 66;
+        const baseline = height - bottom, plotHeight = baseline - top;
+        const y = (v) => baseline - Number(v) * plotHeight;
+        const groupWidth = (width - left - right) / decoders.length;
+        const paperByKey = new Map(paperDecoders.map((v) => [v.key, v]));
+        const shortLabels = ["Chaser collision", "Chaser escape", "Explorer collision", "Explorer approach"];
+        const bars = decoders.map((d, index) => {
+          const center = left + groupWidth * (index + 0.5);
+          const paperStat = (paperByKey.get(d.key) || {}).paper_social;
+          let paperMark = "";
+          if (paperStat) {
+            const py = y(paperStat.mean), pLo = y(Math.max(0, paperStat.mean - paperStat.sd)), pHi = y(Math.min(1, paperStat.mean + paperStat.sd));
+            paperMark = `<line x1="${center + 47}" x2="${center + 47}" y1="${pLo}" y2="${pHi}" stroke="#51585c"/><line x1="${center + 42}" x2="${center + 52}" y1="${pLo}" y2="${pLo}" stroke="#51585c"/><line x1="${center + 42}" x2="${center + 52}" y1="${pHi}" y2="${pHi}" stroke="#51585c"/>${diamond(center + 47, py, 4, "#51585c")}`;
+          }
+          return `<rect x="${center - 42}" y="${y(d.observed)}" width="30" height="${baseline - y(d.observed)}" rx="3" fill="#d84f45"><title>ours observed ${numberText(d.observed, 3)}</title></rect>
+            <rect x="${center - 6}" y="${y(d.shuffled)}" width="30" height="${baseline - y(d.shuffled)}" rx="3" fill="#aeb4b1"><title>ours shuffled ${numberText(d.shuffled, 3)}</title></rect>
+            ${paperMark}
+            <text x="${center}" y="${baseline + 20}" text-anchor="middle" font-size="11" fill="#202426">${shortLabels[index]}</text>
+            <text x="${center}" y="${baseline + 36}" text-anchor="middle" font-size="9.5" fill="#697177">${esc(d.panel)} · ${Number(d.n_samples).toLocaleString()} samples</text>`;
+        }).join("");
+        const ticks = [0, 0.5, 1].map((v) => `<line x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}" stroke="${v === 0.5 ? "#697177" : "#e5e7df"}" stroke-dasharray="${v === 0.5 ? "4 4" : "0"}"/><text x="${left - 9}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="#697177">${v.toFixed(1)}</text>`).join("");
+        return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Balanced-accuracy bars for four social-event decoders">${ticks}<text x="${width - right}" y="${y(0.5) - 6}" text-anchor="end" font-size="9.5" fill="#697177">chance</text>${bars}</svg>`;
+      }
+
+      function spectrumChart(plsc) {
+        const values = plsc.singular_values.map(Number), thresholds = plsc.null_thresholds.map(Number);
+        const width = 820, height = 270, left = 56, right = 20, top = 16, bottom = 46;
+        const baseline = height - bottom, plotWidth = width - left - right;
+        const positive = values.concat(thresholds).filter((v) => v > 0);
+        const minValue = Math.min(...positive) * 0.72, maxValue = Math.max(...positive) * 1.25;
+        const logMin = Math.log10(minValue), logMax = Math.log10(maxValue);
+        const x = (i) => left + i / (values.length - 1) * plotWidth;
+        const y = (v) => baseline - (Math.log10(v) - logMin) / (logMax - logMin) * (baseline - top);
+        const path = (series) => series.map((v, i) => `${i ? "L" : "M"} ${x(i)} ${y(v)}`).join(" ");
+        const yTicks = [0.5, 1, 2, 5, 10, 20, 50].filter((v) => v >= minValue && v <= maxValue)
+          .map((v) => `<line x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}" stroke="#e5e7df"/><text x="${left - 9}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="#697177">${v}</text>`).join("");
+        const xTicks = [1, 4, 8, 12, 16].map((v) => `<text x="${x(v - 1)}" y="${baseline + 22}" text-anchor="middle" font-size="10" fill="#697177">${v}</text>`).join("");
+        const points = values.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="${plsc.significant[i] ? 4 : 3}" fill="#d84f45" stroke="${plsc.significant[i] ? "#4f8a5b" : "none"}" stroke-width="2"><title>dimension ${i + 1}: measured ${numberText(v, 3)}, null95 ${numberText(thresholds[i], 3)}</title></circle>`).join("");
+        return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Measured PLSC spectrum and episode-shuffle threshold for the first 16 dimensions">${yTicks}<path d="${path(thresholds)}" fill="none" stroke="#6d7478" stroke-width="2" stroke-dasharray="5 5"/><path d="${path(values)}" fill="none" stroke="#d84f45" stroke-width="2.5"/>${points}${xTicks}<text x="${left + plotWidth / 2}" y="${height - 4}" text-anchor="middle" font-size="10" fill="#697177">shared-dimension rank</text></svg>
+          <div class="viz-legend"><span><i class="legend-mark"></i>measured</span><span><i class="legend-mark paper"></i>episode-shuffle 95% threshold</span><span style="color:#4f8a5b">green ring = significant</span></div>`;
+      }
+
+      function partnerTrendChart(trend, paperPartner) {
+        const width = 560, height = 265, left = 52, right = 18, top = 18, bottom = 45;
+        const baseline = height - bottom, finalUpdate = Math.max(...trend.map((p) => Number(p.update)));
+        const paperEarly = paperPartner && paperPartner.paper_early_social_percent;
+        const paperLate = paperPartner && paperPartner.paper_late_social_percent;
+        const allY = trend.map((p) => Number(p.partner_unique_percent));
+        if (paperEarly) allY.push(paperEarly.mean + paperEarly.sd);
+        if (paperLate) allY.push(paperLate.mean + paperLate.sd);
+        const yMax = Math.max(...allY, 1) * 1.12;
+        const x = (v) => left + Number(v) / finalUpdate * (width - left - right);
+        const y = (v) => baseline - Number(v) / yMax * (baseline - top);
+        const ourPath = trend.map((p, i) => `${i ? "L" : "M"} ${x(p.update)} ${y(p.partner_unique_percent)}`).join(" ");
+        const yTicks = [0, yMax / 2, yMax].map((v) => `<line x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}" stroke="#e5e7df"/><text x="${left - 8}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="#697177">${numberText(v, 1)}%</text>`).join("");
+        const xTicks = [0, 5000, 10000, 15000, 20000].filter((v) => v <= finalUpdate).map((v) => `<text x="${x(v)}" y="${baseline + 21}" text-anchor="middle" font-size="9.5" fill="#697177">${v / 1000}k</text>`).join("");
+        let paperLine = "";
+        if (paperEarly && paperLate) {
+          const marks = [[0, paperEarly], [finalUpdate, paperLate]].map(([u, stat]) => {
+            const px = x(u), lo = y(Math.max(0, stat.mean - stat.sd)), hi = y(stat.mean + stat.sd);
+            return `<line x1="${px}" x2="${px}" y1="${lo}" y2="${hi}" stroke="#6d7478"/><line x1="${px - 5}" x2="${px + 5}" y1="${lo}" y2="${lo}" stroke="#6d7478"/><line x1="${px - 5}" x2="${px + 5}" y1="${hi}" y2="${hi}" stroke="#6d7478"/><circle cx="${px}" cy="${y(stat.mean)}" r="4" fill="#6d7478"/>`;
+          }).join("");
+          paperLine = `<path d="M ${x(0)} ${y(paperEarly.mean)} L ${x(finalUpdate)} ${y(paperLate.mean)}" fill="none" stroke="#6d7478" stroke-width="2" stroke-dasharray="5 5"/>${marks}`;
+        }
+        const points = trend.map((p) => `<circle cx="${x(p.update)}" cy="${y(p.partner_unique_percent)}" r="4" fill="#d84f45"><title>update ${p.update}: ${numberText(p.partner_unique_percent, 2)}%, ${numberText(p.collisions_per_episode, 1)} collisions</title></circle>`).join("");
+        return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Partner-unique variance over training updates">${yTicks}${paperLine}<path d="${ourPath}" fill="none" stroke="#d84f45" stroke-width="2.5"/>${points}${xTicks}<text x="${left + (width - left - right) / 2}" y="${height - 4}" text-anchor="middle" font-size="10" fill="#697177">training update</text></svg>`;
+      }
+
+      function partnerCollisionScatter(trend) {
+        const width = 560, height = 265, left = 54, right = 18, top = 18, bottom = 48;
+        const baseline = height - bottom;
+        const xMax = Math.max(...trend.map((p) => Number(p.partner_unique_percent)), 1) * 1.12;
+        const yMax = Math.max(...trend.map((p) => Number(p.collisions_per_episode)), 1) * 1.12;
+        const x = (v) => left + Number(v) / xMax * (width - left - right);
+        const y = (v) => baseline - Number(v) / yMax * (baseline - top);
+        const yTicks = [0, yMax / 2, yMax].map((v) => `<line x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}" stroke="#e5e7df"/><text x="${left - 8}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="#697177">${numberText(v, 0)}</text>`).join("");
+        const xTicks = [0, xMax / 2, xMax].map((v) => `<text x="${x(v)}" y="${baseline + 21}" text-anchor="middle" font-size="9.5" fill="#697177">${numberText(v, 1)}%</text>`).join("");
+        const points = trend.map((p) => `<circle cx="${x(p.partner_unique_percent)}" cy="${y(p.collisions_per_episode)}" r="5" fill="#d84f45" opacity="0.9"><title>update ${p.update}: ${numberText(p.partner_unique_percent, 2)}%, ${numberText(p.collisions_per_episode, 1)} collisions</title></circle><text x="${x(p.partner_unique_percent) + 7}" y="${y(p.collisions_per_episode) - 5}" font-size="8.5" fill="#697177">${Number(p.update) / 1000}k</text>`).join("");
+        return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Partner-unique variance against self-play collision count">${yTicks}${points}${xTicks}<text x="${left + (width - left - right) / 2}" y="${height - 4}" text-anchor="middle" font-size="10" fill="#697177">partner-unique variance</text><text x="12" y="${top + (baseline - top) / 2}" text-anchor="middle" font-size="10" fill="#697177" transform="rotate(-90 12 ${top + (baseline - top) / 2})">collisions / 500-step episode</text></svg>`;
+      }
+
+      function perturbationPanels(perturbation, paperPerturbation) {
+        const definitions = [
+          ["collisions", "collisions_per_episode", 1],
+          ["partner_in_vision", "partner_in_vision", 100],
+          ["average_distance", "average_distance", 1],
+        ];
+        const paperByKey = new Map(paperPerturbation.map((v) => [v.key, v]));
+        return definitions.map(([paperKey, metricKey, scale]) => {
+          const reference = paperByKey.get(paperKey);
+          if (!reference) return "";
+          return perturbationPanel(reference, perturbation.conditions, metricKey, scale);
+        }).join("");
+      }
+
+      function perturbationPanel(reference, conditions, metricKey, scale) {
+        const defs = [
+          ["unperturbed", "original", "#d84f45", "paper_original"],
+          ["shared_removed", "shared", "#2189a8", "paper_shared_removed"],
+          ["random_removed", "random", "#89908c", "paper_random_removed"],
+        ];
+        const values = defs.flatMap(([condition, , , paperKey]) => [Number(conditions[condition][metricKey]) * scale, reference[paperKey].mean + reference[paperKey].sd]);
+        const yMax = Math.max(...values, 1) * 1.12;
+        const width = 360, height = 230, left = 42, right = 12, top = 15, bottom = 52, baseline = height - bottom;
+        const y = (v) => baseline - Number(v) / yMax * (baseline - top);
+        const groupWidth = (width - left - right) / defs.length;
+        const marks = defs.map(([condition, label, color, paperKey], index) => {
+          const center = left + groupWidth * (index + 0.5);
+          const ours = Number(conditions[condition][metricKey]) * scale;
+          const paperStat = reference[paperKey];
+          const lo = y(Math.max(0, paperStat.mean - paperStat.sd)), hi = y(paperStat.mean + paperStat.sd);
+          return `<rect x="${center - 18}" y="${y(ours)}" width="36" height="${baseline - y(ours)}" rx="3" fill="${color}"><title>our ${label}: ${numberText(ours, 2)}</title></rect>
+            <line x1="${center + 24}" x2="${center + 24}" y1="${lo}" y2="${hi}" stroke="#41484b"/><line x1="${center + 19}" x2="${center + 29}" y1="${lo}" y2="${lo}" stroke="#41484b"/><line x1="${center + 19}" x2="${center + 29}" y1="${hi}" y2="${hi}" stroke="#41484b"/>${diamond(center + 24, y(paperStat.mean), 4, "#41484b")}
+            <text x="${center}" y="${baseline + 18}" text-anchor="middle" font-size="9.5" fill="#202426">${label}</text>`;
+        }).join("");
+        const ticks = [0, yMax / 2, yMax].map((v) => `<line x1="${left}" x2="${width - right}" y1="${y(v)}" y2="${y(v)}" stroke="#e5e7df"/><text x="${left - 7}" y="${y(v) + 4}" text-anchor="end" font-size="9" fill="#697177">${numberText(v, yMax < 5 ? 1 : 0)}</text>`).join("");
+        const ourValues = defs.map(([condition, label]) => `${label} ${numberText(Number(conditions[condition][metricKey]) * scale, 2)}`).join(" · ");
+        return `<div class="viz-panel"><div class="viz-title">${esc(reference.label)} <span>${esc(reference.panel)}</span></div><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(reference.label)} under three perturbation conditions">${ticks}${marks}</svg><div class="viz-values"><span>our seed: <strong>${ourValues}</strong></span></div></div>`;
       }
 
       // Paper claim alignment (C1-C5)

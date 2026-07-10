@@ -171,6 +171,34 @@ def test_load_policy_pair_rebuilds_eval_policies(tmp_path) -> None:
     assert torch.equal(pair.explorer.rnn.weight_hh_l0, explorer.rnn.weight_hh_l0)
 
 
+def test_load_policy_pair_leaves_global_rng_untouched(tmp_path) -> None:
+    """Loading must not consume the caller's seeded RNG stream, regardless of
+    how many constructor draws the checkpoint's rnn_initialization implies."""
+    torch.manual_seed(0)
+    config = GridWorldConfig(max_steps=5)
+    chaser = build_policy("rnn", config.observation_size, hidden_size=8)
+    explorer = build_policy("rnn", config.observation_size, hidden_size=8)
+    for init in ("modern", "pytorch_default"):
+        checkpoint = tmp_path / f"checkpoint_{init}.safetensors"
+        save_checkpoint(
+            checkpoint,
+            config={
+                "env": asdict(config),
+                "architecture": "rnn",
+                "hidden_size": 8,
+                "rnn_initialization": init,
+            },
+            metrics={},
+            chaser_state=chaser.state_dict(),
+            explorer_state=explorer.state_dict(),
+        )
+        torch.manual_seed(777)
+        expected = torch.rand(8)
+        torch.manual_seed(777)
+        load_policy_pair(checkpoint, device=torch.device("cpu"))
+        assert torch.equal(torch.rand(8), expected)
+
+
 def test_load_policy_pair_missing_hidden_size_names_checkpoint(tmp_path) -> None:
     torch.manual_seed(0)
     config = GridWorldConfig(max_steps=5)

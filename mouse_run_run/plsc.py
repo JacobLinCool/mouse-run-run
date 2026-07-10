@@ -105,8 +105,11 @@ def null_singular_values(
 
     The temporal null draws from ``torch.Generator`` and the episode nulls
     from ``numpy.random.RandomState``; each permutation stream is unchanged
-    from the pre-merge per-caller implementations so existing analyses
-    reproduce exactly.
+    from the pre-merge per-caller implementations. Temporal-null results
+    reproduce bit-identically; the episode nulls' permutation matmul+SVD moved
+    from numpy to torch float32 (different BLAS), so their thresholds agree
+    only to ~1e-6 — significance decisions were unchanged in testing, but a
+    singular value within that margin of a threshold could flip on re-run.
     """
     if null_model not in NULL_MODELS:
         raise ValueError(f"unknown null model: {null_model}")

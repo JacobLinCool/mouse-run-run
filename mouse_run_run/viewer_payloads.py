@@ -15,6 +15,7 @@ from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import ACTION_COUNT, ACTION_DELTA_VALUES, BatchedChaseEnv
 from mouse_run_run.plsc import compute_plsc, project_norms, shared_variance_fraction
 from mouse_run_run.policy import OpponentMode, select_action
+from mouse_run_run.provenance import read_jsonl
 from mouse_run_run.rollout import collect_batch
 from mouse_run_run.serialization import CHECKPOINT_FORMAT, read_metadata
 from mouse_run_run.training_config import select_device
@@ -136,16 +137,384 @@ def build_report(runs_root: Path, project_root: Path) -> dict[str, object]:
     paper_reference = _read_json_or_none(
         project_root / "docs" / "paper-notes" / "original-paper-reference.json"
     )
+    rnn_social_example = _rnn_social_example(runs_root)
 
     return {
         "experiments": experiments,
         "cross_architecture": cross,
         "figures": figures,
         "paper_reference": paper_reference,
+        "rnn_social_example": rnn_social_example,
         "report_markdown": report_md,
         "claim_alignment": _claim_alignment(analyses_root),
         "alignment_markdown": alignment_md,
     }
+
+
+# This is a report display policy, not a paper hyperparameter. Requiring at least
+# 20 of the paper-style 25 x 500-step self-play rollouts keeps the illustrative
+# checkpoint grounded in a mostly non-degenerate analysis pool (Fig. 6b-h).
+_EXAMPLE_MIN_VALID_SELF_PLAY_EPISODES = 20
+
+# Fig. 6g contains the complete shared-dimension test. The report shows the
+# leading 16 dimensions only so that the spectrum remains legible on a slide;
+# the full significant-dimension count is still reported alongside it.
+_EXAMPLE_SPECTRUM_DIMENSIONS = 16
+
+
+def _rnn_social_example(runs_root: Path) -> dict[str, object] | None:
+    """Build a traceable, single-checkpoint visualization payload.
+
+    The checkpoint is selected post hoc for exposition: among RNN/social final
+    checkpoints with a complete C2-C5 record and at least 20 valid paper-style
+    self-play episodes, choose the checkpoint with the most collisions against
+    the standardized random explorer. This creates a visually clear social
+    example while keeping the cross-seed summaries as the inferential result.
+
+    Missing source artifacts omit the optional atlas. Existing but malformed or
+    duplicated canonical records raise, because silently substituting another
+    checkpoint would make the displayed analysis irreproducible.
+    """
+    experiment = "mouse-run-run-1"
+    tables_root = runs_root / "tables" / experiment
+    analyses_root = runs_root / "analyses"
+    source_paths = {
+        "runs": tables_root / "runs.jsonl",
+        "evaluations": tables_root / "evaluations.jsonl",
+        "rollouts": tables_root / "rollouts.jsonl",
+        "neural": analyses_root / experiment / "neural_records.jsonl",
+        "c4": analyses_root / f"c4_{experiment}.json",
+        "c5": analyses_root / f"c5_{experiment}.json",
+    }
+    if any(not path.exists() for path in source_paths.values()):
+        return None
+
+    runs = read_jsonl(source_paths["runs"])
+    evaluations = read_jsonl(source_paths["evaluations"])
+    rollouts = read_jsonl(source_paths["rollouts"])
+    neural_records = read_jsonl(source_paths["neural"])
+    c4 = _read_required_json_object(source_paths["c4"])
+    c5 = _read_required_json_object(source_paths["c5"])
+
+    c4_social = (c4.get("results") or {}).get("social")
+    c5_units = c5.get("units")
+    if not isinstance(c4_social, list) or not isinstance(c5_units, list):
+        raise ValueError("C4/C5 analysis artifacts do not contain per-seed social units")
+
+    social_neural = [
+        row
+        for row in neural_records
+        if isinstance(row, dict)
+        and row.get("architecture") == "rnn"
+        and row.get("task") == "social"
+    ]
+    eligible: list[dict[str, object]] = []
+    for neural in social_neural:
+        checkpoint = neural.get("checkpoint")
+        seed = neural.get("seed")
+        if not isinstance(checkpoint, str) or not isinstance(seed, int):
+            continue
+
+        run = _unique_record(
+            [row for row in runs if isinstance(row, dict) and row.get("checkpoint") == checkpoint],
+            f"run record for {checkpoint}",
+        )
+        rollout = _unique_record(
+            [row for row in rollouts if isinstance(row, dict) and row.get("checkpoint") == checkpoint],
+            f"rollout record for {checkpoint}",
+        )
+        random_explorer = _unique_record(
+            [
+                row
+                for row in evaluations
+                if isinstance(row, dict)
+                and row.get("checkpoint") == checkpoint
+                and row.get("opponent_mode") == "random_explorer"
+            ],
+            f"random-explorer evaluation for {checkpoint}",
+        )
+        random_chaser = _unique_record(
+            [
+                row
+                for row in evaluations
+                if isinstance(row, dict)
+                and row.get("checkpoint") == checkpoint
+                and row.get("opponent_mode") == "random_chaser"
+            ],
+            f"random-chaser evaluation for {checkpoint}",
+        )
+        c4_unit = _unique_record(
+            [row for row in c4_social if isinstance(row, dict) and row.get("seed") == seed],
+            f"C4 social unit for seed {seed}",
+        )
+        c5_unit = _unique_record(
+            [row for row in c5_units if isinstance(row, dict) and row.get("seed") == seed],
+            f"C5 unit for seed {seed}",
+        )
+        if None in (run, rollout, random_explorer, random_chaser, c4_unit, c5_unit):
+            continue
+
+        episode_count = rollout.get("episode_count")
+        degenerate_count = rollout.get("degenerate_episode_count")
+        if not isinstance(episode_count, int) or not isinstance(degenerate_count, int):
+            continue
+        valid_self_play = episode_count - degenerate_count
+        decoding = neural.get("decoding")
+        plsc = neural.get("plsc")
+        if (
+            valid_self_play < _EXAMPLE_MIN_VALID_SELF_PLAY_EPISODES
+            or neural.get("n_valid_episodes") != valid_self_play
+            or not _complete_decoding(decoding)
+            or not _complete_plsc(plsc)
+            or not _complete_c4(c4_unit)
+            or not _complete_c5(c5_unit)
+        ):
+            continue
+
+        score = _nested_number(random_explorer, "metrics", "collisions_per_episode")
+        if score is None:
+            continue
+        eligible.append(
+            {
+                "score": score,
+                "seed": seed,
+                "checkpoint": checkpoint,
+                "run": run,
+                "rollout": rollout,
+                "random_explorer": random_explorer,
+                "random_chaser": random_chaser,
+                "neural": neural,
+                "c4": c4_unit,
+                "c5": c5_unit,
+                "valid_self_play": valid_self_play,
+            }
+        )
+
+    if not eligible:
+        return None
+    selected = sorted(eligible, key=lambda row: (-float(row["score"]), int(row["seed"])))[0]
+    run = selected["run"]
+    random_explorer = selected["random_explorer"]
+    random_chaser = selected["random_chaser"]
+    neural = selected["neural"]
+    c4_unit = selected["c4"]
+    c5_unit = selected["c5"]
+    assert isinstance(run, dict)
+    assert isinstance(random_explorer, dict)
+    assert isinstance(random_chaser, dict)
+    assert isinstance(neural, dict)
+    assert isinstance(c4_unit, dict)
+    assert isinstance(c5_unit, dict)
+
+    final_update = run.get("update")
+    if not isinstance(final_update, int):
+        raise ValueError(f"selected example has no integer update: {selected['checkpoint']}")
+
+    decoding = neural["decoding"]
+    decoder_labels = (
+        ("chaser_collision", "Chaser: collision", "Fig. 6b"),
+        ("chaser_partner_escape", "Chaser: partner escape", "Fig. 6c"),
+        ("explorer_collision", "Explorer: collision", "Fig. 6d"),
+        ("explorer_partner_approach", "Explorer: partner approach", "Fig. 6e"),
+    )
+    decoders = [
+        {
+            "key": key,
+            "label": label,
+            "panel": panel,
+            "observed": decoding[key]["balanced_accuracy"],
+            "shuffled": decoding[key]["shuffled_accuracy"],
+            "n_positive": decoding[key]["n_positive"],
+            "n_samples": decoding[key]["n_samples"],
+        }
+        for key, label, panel in decoder_labels
+    ]
+
+    plsc = neural["plsc"]
+    episode_null = plsc["nulls"]["episode_shuffle"]
+    singular_values = plsc["singular_values"][:_EXAMPLE_SPECTRUM_DIMENSIONS]
+    thresholds = episode_null["thresholds"][:_EXAMPLE_SPECTRUM_DIMENSIONS]
+    significant = episode_null["significant"][:_EXAMPLE_SPECTRUM_DIMENSIONS]
+
+    trend = []
+    for point in c4_unit["trend"]:
+        display_update = final_update if point.get("is_latest") else point["update"]
+        trend.append(
+            {
+                "update": display_update,
+                "partner_unique_percent": point["partner_unique"] * 100,
+                "collisions_per_episode": point["collisions_per_episode"],
+                "n_valid_episodes": point["n_valid_episodes"],
+                "is_latest": bool(point.get("is_latest")),
+            }
+        )
+
+    random_explorer_metrics = random_explorer["metrics"]
+    random_chaser_metrics = random_chaser["metrics"]
+    return {
+        "schema_version": 1,
+        "architecture": "RNN",
+        "task": "social",
+        "seed": selected["seed"],
+        "checkpoint": selected["checkpoint"],
+        "update": final_update,
+        "selection": {
+            "kind": "post_hoc_visual_exemplar",
+            "rule": (
+                "Among RNN/social final checkpoints with at least 20 valid 500-step "
+                "self-play episodes and complete C2-C5 records, select the highest "
+                "collisions/episode against the standardized random explorer; ties "
+                "resolve to the lowest seed."
+            ),
+            "candidate_count": len(social_neural),
+            "eligible_count": len(eligible),
+            "eligible_seeds": sorted(int(row["seed"]) for row in eligible),
+            "score": selected["score"],
+        },
+        "protocols": {
+            "behavior": {
+                "name": random_explorer.get("evaluation_protocol"),
+                "episodes": random_explorer.get("episodes"),
+                "max_steps": random_explorer.get("max_steps"),
+            },
+            "self_play": {
+                "episodes": selected["rollout"].get("episode_count"),
+                "valid_episodes": selected["valid_self_play"],
+                "max_steps": selected["rollout"].get("max_steps"),
+                "degenerate_threshold_fraction": selected["rollout"].get(
+                    "degenerate_threshold_fraction"
+                ),
+            },
+        },
+        "behavior": {
+            "chaser_collisions": random_explorer_metrics["collisions_per_episode"],
+            "chaser_partner_vision_percent": random_explorer_metrics["chaser_partner_vision"] * 100,
+            "chaser_average_distance": random_explorer_metrics["average_distance"],
+            "chaser_new_fields": random_explorer_metrics["chaser_new_fields"],
+            "explorer_new_fields": random_chaser_metrics["explorer_new_fields"],
+            "explorer_average_distance": random_chaser_metrics["average_distance"],
+            "random_explorer_degenerate_fraction": random_explorer_metrics.get("degenerate_fraction"),
+            "random_chaser_degenerate_fraction": random_chaser_metrics.get("degenerate_fraction"),
+        },
+        "decoding": decoders,
+        "plsc": {
+            "panel": "Fig. 6g-h",
+            "headline_null": plsc["headline_null"],
+            "n_episodes": plsc["n_episodes"],
+            "n_samples": plsc["n_samples"],
+            "permutations": plsc["permutations"],
+            "n_significant": plsc["n_significant"],
+            "top_dim_correlation": plsc["top_dim_correlation"],
+            "singular_values": singular_values,
+            "null_thresholds": thresholds,
+            "significant": significant,
+        },
+        "partner_representation": {
+            "panel": "Fig. 6p-r",
+            "trend": trend,
+        },
+        "perturbation": {
+            "panels": "Fig. 6s-u",
+            "episodes": c5.get("episodes"),
+            "max_steps": c5.get("max_steps"),
+            "conditions": {
+                condition: c5_unit[condition]
+                for condition in ("unperturbed", "shared_removed", "random_removed")
+            },
+        },
+        "sources": {name: str(path) for name, path in source_paths.items()},
+    }
+
+
+def _read_required_json_object(path: Path) -> dict[str, object]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"expected a JSON object in {path}")
+    return data
+
+
+def _unique_record(records: list[dict], label: str) -> dict | None:
+    if len(records) > 1:
+        raise ValueError(f"duplicate canonical {label}")
+    return records[0] if records else None
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _nested_number(record: dict, *keys: str) -> float | None:
+    value: object = record
+    for key in keys:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return _number(value)
+
+
+def _complete_decoding(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    required = (
+        "chaser_collision",
+        "chaser_partner_escape",
+        "explorer_collision",
+        "explorer_partner_approach",
+    )
+    return all(
+        isinstance(value.get(key), dict)
+        and _number(value[key].get("balanced_accuracy")) is not None
+        and _number(value[key].get("shuffled_accuracy")) is not None
+        for key in required
+    )
+
+
+def _complete_plsc(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    nulls = value.get("nulls")
+    episode_null = nulls.get("episode_shuffle") if isinstance(nulls, dict) else None
+    singular_values = value.get("singular_values")
+    thresholds = episode_null.get("thresholds") if isinstance(episode_null, dict) else None
+    significant = episode_null.get("significant") if isinstance(episode_null, dict) else None
+    return (
+        isinstance(singular_values, list)
+        and isinstance(thresholds, list)
+        and isinstance(significant, list)
+        and len(singular_values) >= _EXAMPLE_SPECTRUM_DIMENSIONS
+        and len(thresholds) >= _EXAMPLE_SPECTRUM_DIMENSIONS
+        and len(significant) >= _EXAMPLE_SPECTRUM_DIMENSIONS
+        and _number(value.get("top_dim_correlation")) is not None
+        and isinstance(value.get("n_significant"), int)
+    )
+
+
+def _complete_c4(value: object) -> bool:
+    if not isinstance(value, dict) or not isinstance(value.get("trend"), list):
+        return False
+    return bool(value["trend"]) and all(
+        isinstance(point, dict)
+        and isinstance(point.get("update"), int)
+        and isinstance(point.get("n_valid_episodes"), int)
+        and _number(point.get("partner_unique")) is not None
+        and _number(point.get("collisions_per_episode")) is not None
+        for point in value["trend"]
+    )
+
+
+def _complete_c5(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return all(
+        isinstance(value.get(condition), dict)
+        and all(
+            _number(value[condition].get(metric)) is not None
+            for metric in ("collisions_per_episode", "partner_in_vision", "average_distance")
+        )
+        for condition in ("unperturbed", "shared_removed", "random_removed")
+    )
 
 
 # The C1-C5 claim table (statements, verdicts, written findings) is content,

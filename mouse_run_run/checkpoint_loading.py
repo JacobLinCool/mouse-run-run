@@ -59,17 +59,22 @@ def load_policy_pair(
             hidden_size=config["hidden_size"],
             # Pre-preset checkpoints predate this key; "modern" matches both
             # their training-time initialization and build_policy's default.
-            # The initial weights are overwritten by load_state_dict below,
-            # but the constructor draws from torch's global RNG, so honoring
-            # the saved key keeps downstream seeded sampling consistent with
-            # the checkpoint's training regime.
+            # The initial weights are overwritten by load_state_dict below.
             rnn_initialization=config.get("rnn_initialization", "modern"),
         ).to(device)
 
-    chaser = build()
-    explorer = build()
-    chaser.load_state_dict(chaser_state)
-    explorer.load_state_dict(explorer_state)
+    # Constructor weight initialization draws from torch's global CPU RNG (a
+    # draw count that varies by architecture and rnn_initialization), and the
+    # initial weights are discarded by load_state_dict anyway. Fork the RNG so
+    # loading a checkpoint never perturbs the caller's seeded sampling stream.
+    # Note: artifacts recorded before this isolation included the construction
+    # draws, so their same-seed stochastic numbers are not directly comparable
+    # to re-runs (statistically equivalent, not value-identical).
+    with torch.random.fork_rng(devices=[]):
+        chaser = build()
+        explorer = build()
+        chaser.load_state_dict(chaser_state)
+        explorer.load_state_dict(explorer_state)
     chaser.eval()
     explorer.eval()
     return LoadedPolicyPair(
