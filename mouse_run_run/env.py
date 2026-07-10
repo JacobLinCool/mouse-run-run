@@ -12,15 +12,30 @@ SpawnMode = Literal["full_grid", "official_exclude_last"]
 # [OFFICIAL-ARENAS] maps actions as 0=up, 1=right, 2=down, 3=left.
 # Source IDs resolve in experiments/paper_marl_official_dynamics_2026/SPEC.md,
 # "Implementation Source Registry".
-ACTION_DELTAS = torch.tensor(
-    [
-        [-1, 0],
-        [0, 1],
-        [1, 0],
-        [0, -1],
-    ],
-    dtype=torch.long,
+# Single source of truth for the action table: the CPU path uses the tensor
+# below and the Triton kernel receives these values as constexpr arguments.
+ACTION_DELTA_VALUES: tuple[tuple[int, int], ...] = (
+    (-1, 0),
+    (0, 1),
+    (1, 0),
+    (0, -1),
 )
+
+ACTION_DELTAS = torch.tensor(ACTION_DELTA_VALUES, dtype=torch.long)
+
+# [PAPER-METHODS] Supplementary Table 3; [OFFICIAL-ARENAS] lines that
+# implement r1=explorer and r2=chaser. The names below use paper roles.
+# Single source of truth for the reward table: the CPU path (_rewards) uses
+# these values directly and the Triton kernel receives them as constexpr
+# arguments at launch.
+CHASER_STEP_REWARD = -0.1
+EXPLORER_STEP_REWARD = -0.5
+CHASER_NEW_FIELD_REWARD = 0.1
+EXPLORER_NEW_FIELD_REWARD = 1.0
+SOCIAL_CHASER_COLLISION_REWARD = 1.0
+SOCIAL_EXPLORER_COLLISION_REWARD = -1.0
+NON_SOCIAL_CHASER_COLLISION_REWARD = -0.1
+NON_SOCIAL_EXPLORER_COLLISION_REWARD = -0.5
 
 
 @dataclass(frozen=True)
@@ -442,18 +457,18 @@ class BatchedChaseEnv:
         # [PAPER-METHODS] Supplementary Table 3; [OFFICIAL-ARENAS] lines that
         # implement r1=explorer and r2=chaser. The names below use paper roles.
         if self.config.task == "social":
-            chaser_collision_reward = 1.0
-            explorer_collision_reward = -1.0
+            chaser_collision_reward = SOCIAL_CHASER_COLLISION_REWARD
+            explorer_collision_reward = SOCIAL_EXPLORER_COLLISION_REWARD
         elif self.config.task == "non_social":
-            chaser_collision_reward = -0.1
-            explorer_collision_reward = -0.5
+            chaser_collision_reward = NON_SOCIAL_CHASER_COLLISION_REWARD
+            explorer_collision_reward = NON_SOCIAL_EXPLORER_COLLISION_REWARD
         else:
             raise ValueError(f"Unsupported task: {self.config.task}")
 
-        chaser_reward = torch.full((self.batch_size,), -0.1, device=self.device)
-        explorer_reward = torch.full((self.batch_size,), -0.5, device=self.device)
-        chaser_reward = torch.where(chaser_new_field, 0.1, chaser_reward)
-        explorer_reward = torch.where(explorer_new_field, 1.0, explorer_reward)
+        chaser_reward = torch.full((self.batch_size,), CHASER_STEP_REWARD, device=self.device)
+        explorer_reward = torch.full((self.batch_size,), EXPLORER_STEP_REWARD, device=self.device)
+        chaser_reward = torch.where(chaser_new_field, CHASER_NEW_FIELD_REWARD, chaser_reward)
+        explorer_reward = torch.where(explorer_new_field, EXPLORER_NEW_FIELD_REWARD, explorer_reward)
         chaser_reward = torch.where(collision, chaser_collision_reward, chaser_reward)
         explorer_reward = torch.where(collision, explorer_collision_reward, explorer_reward)
         return chaser_reward * active.float(), explorer_reward * active.float()

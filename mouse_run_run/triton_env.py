@@ -4,7 +4,19 @@ import torch
 import triton
 import triton.language as tl
 
-from mouse_run_run.env import BatchedChaseEnv, TrainingStepResult
+from mouse_run_run.env import (
+    ACTION_DELTA_VALUES,
+    CHASER_NEW_FIELD_REWARD,
+    CHASER_STEP_REWARD,
+    EXPLORER_NEW_FIELD_REWARD,
+    EXPLORER_STEP_REWARD,
+    NON_SOCIAL_CHASER_COLLISION_REWARD,
+    NON_SOCIAL_EXPLORER_COLLISION_REWARD,
+    SOCIAL_CHASER_COLLISION_REWARD,
+    SOCIAL_EXPLORER_COLLISION_REWARD,
+    BatchedChaseEnv,
+    TrainingStepResult,
+)
 
 
 # [LOCAL-CALIBRATION] Triton is a local acceleration path, not part of the
@@ -31,6 +43,19 @@ def triton_step_training(
     explorer_partner_visible = torch.empty_like(env.done)
     distance = torch.empty(batch_size, dtype=torch.float32, device=env.device)
 
+    # Task-conditional collision rewards resolve here so the kernel receives
+    # the shared env.py constants; constexpr arguments specialize the compiled
+    # kernel per task exactly as the previous TASK_ID branch did.
+    if env.config.task == "social":
+        chaser_collision_reward = SOCIAL_CHASER_COLLISION_REWARD
+        explorer_collision_reward = SOCIAL_EXPLORER_COLLISION_REWARD
+    else:
+        chaser_collision_reward = NON_SOCIAL_CHASER_COLLISION_REWARD
+        explorer_collision_reward = NON_SOCIAL_EXPLORER_COLLISION_REWARD
+    (up_row, up_col), (right_row, right_col), (down_row, down_col), (left_row, left_col) = (
+        ACTION_DELTA_VALUES
+    )
+
     _step_training_kernel[(1,)](
         env.chaser_position,
         env.explorer_position,
@@ -55,7 +80,20 @@ def triton_step_training(
         GRID_SIZE=env.config.grid_size,
         MAX_STEPS=env.config.max_steps,
         VISION_RADIUS=env.config.vision_radius,
-        TASK_ID=0 if env.config.task == "social" else 1,
+        UP_ROW_DELTA=up_row,
+        UP_COL_DELTA=up_col,
+        RIGHT_ROW_DELTA=right_row,
+        RIGHT_COL_DELTA=right_col,
+        DOWN_ROW_DELTA=down_row,
+        DOWN_COL_DELTA=down_col,
+        LEFT_ROW_DELTA=left_row,
+        LEFT_COL_DELTA=left_col,
+        CHASER_STEP_REWARD_VALUE=CHASER_STEP_REWARD,
+        EXPLORER_STEP_REWARD_VALUE=EXPLORER_STEP_REWARD,
+        CHASER_NEW_FIELD_REWARD_VALUE=CHASER_NEW_FIELD_REWARD,
+        EXPLORER_NEW_FIELD_REWARD_VALUE=EXPLORER_NEW_FIELD_REWARD,
+        CHASER_COLLISION_REWARD_VALUE=chaser_collision_reward,
+        EXPLORER_COLLISION_REWARD_VALUE=explorer_collision_reward,
     )
     return TrainingStepResult(
         chaser_reward=chaser_reward,
@@ -72,10 +110,29 @@ def triton_step_training(
 
 
 @triton.jit
-def _action_delta(action: tl.tensor) -> tuple[tl.tensor, tl.tensor]:
-    # [OFFICIAL-ARENAS]: 0=up, 1=right, 2=down, 3=left.
-    row_delta = tl.where(action == 0, -1, tl.where(action == 2, 1, 0))
-    col_delta = tl.where(action == 1, 1, tl.where(action == 3, -1, 0))
+def _action_delta(
+    action: tl.tensor,
+    UP_ROW_DELTA: tl.constexpr,
+    UP_COL_DELTA: tl.constexpr,
+    RIGHT_ROW_DELTA: tl.constexpr,
+    RIGHT_COL_DELTA: tl.constexpr,
+    DOWN_ROW_DELTA: tl.constexpr,
+    DOWN_COL_DELTA: tl.constexpr,
+    LEFT_ROW_DELTA: tl.constexpr,
+    LEFT_COL_DELTA: tl.constexpr,
+) -> tuple[tl.tensor, tl.tensor]:
+    # [OFFICIAL-ARENAS]: 0=up, 1=right, 2=down, 3=left. The deltas come from
+    # env.ACTION_DELTA_VALUES via the kernel's constexpr arguments.
+    row_delta = tl.where(
+        action == 0,
+        UP_ROW_DELTA,
+        tl.where(action == 1, RIGHT_ROW_DELTA, tl.where(action == 2, DOWN_ROW_DELTA, LEFT_ROW_DELTA)),
+    )
+    col_delta = tl.where(
+        action == 0,
+        UP_COL_DELTA,
+        tl.where(action == 1, RIGHT_COL_DELTA, tl.where(action == 2, DOWN_COL_DELTA, LEFT_COL_DELTA)),
+    )
     return row_delta, col_delta
 
 
@@ -104,7 +161,20 @@ def _step_training_kernel(
     GRID_SIZE: tl.constexpr,
     MAX_STEPS: tl.constexpr,
     VISION_RADIUS: tl.constexpr,
-    TASK_ID: tl.constexpr,
+    UP_ROW_DELTA: tl.constexpr,
+    UP_COL_DELTA: tl.constexpr,
+    RIGHT_ROW_DELTA: tl.constexpr,
+    RIGHT_COL_DELTA: tl.constexpr,
+    DOWN_ROW_DELTA: tl.constexpr,
+    DOWN_COL_DELTA: tl.constexpr,
+    LEFT_ROW_DELTA: tl.constexpr,
+    LEFT_COL_DELTA: tl.constexpr,
+    CHASER_STEP_REWARD_VALUE: tl.constexpr,
+    EXPLORER_STEP_REWARD_VALUE: tl.constexpr,
+    CHASER_NEW_FIELD_REWARD_VALUE: tl.constexpr,
+    EXPLORER_NEW_FIELD_REWARD_VALUE: tl.constexpr,
+    CHASER_COLLISION_REWARD_VALUE: tl.constexpr,
+    EXPLORER_COLLISION_REWARD_VALUE: tl.constexpr,
 ) -> None:
     batch = tl.arange(0, BLOCK_SIZE)
     mask = batch < batch_size
@@ -120,7 +190,17 @@ def _step_training_kernel(
 
     # [OFFICIAL-ARENAS]: agent2=chaser moves before agent1=explorer.
     chaser_action_value = tl.load(chaser_action + batch, mask=mask, other=0)
-    chaser_row_delta, chaser_col_delta = _action_delta(chaser_action_value)
+    chaser_row_delta, chaser_col_delta = _action_delta(
+        chaser_action_value,
+        UP_ROW_DELTA,
+        UP_COL_DELTA,
+        RIGHT_ROW_DELTA,
+        RIGHT_COL_DELTA,
+        DOWN_ROW_DELTA,
+        DOWN_COL_DELTA,
+        LEFT_ROW_DELTA,
+        LEFT_COL_DELTA,
+    )
     chaser_candidate_row = tl.minimum(
         tl.maximum(old_chaser_row + chaser_row_delta, 0),
         GRID_SIZE - 1,
@@ -140,7 +220,17 @@ def _step_training_kernel(
     chaser_next_col = tl.where(active, chaser_next_col, old_chaser_col)
 
     explorer_action_value = tl.load(explorer_action + batch, mask=mask, other=0)
-    explorer_row_delta, explorer_col_delta = _action_delta(explorer_action_value)
+    explorer_row_delta, explorer_col_delta = _action_delta(
+        explorer_action_value,
+        UP_ROW_DELTA,
+        UP_COL_DELTA,
+        RIGHT_ROW_DELTA,
+        RIGHT_COL_DELTA,
+        DOWN_ROW_DELTA,
+        DOWN_COL_DELTA,
+        LEFT_ROW_DELTA,
+        LEFT_COL_DELTA,
+    )
     explorer_candidate_row = tl.minimum(
         tl.maximum(old_explorer_row + explorer_row_delta, 0),
         GRID_SIZE - 1,
@@ -194,17 +284,15 @@ def _step_training_kernel(
     visible = tl.maximum(abs_row, abs_col) <= VISION_RADIUS
 
     # [PAPER-METHODS] Supplementary Table 3 and [OFFICIAL-ARENAS]; names are
-    # translated from released agent2/agent1 to chaser/explorer.
-    chaser_reward = tl.full((BLOCK_SIZE,), -0.1, tl.float32)
-    explorer_reward = tl.full((BLOCK_SIZE,), -0.5, tl.float32)
-    chaser_reward = tl.where(chaser_new_field, 0.1, chaser_reward)
-    explorer_reward = tl.where(explorer_new_field, 1.0, explorer_reward)
-    if TASK_ID == 0:
-        chaser_reward = tl.where(collision, 1.0, chaser_reward)
-        explorer_reward = tl.where(collision, -1.0, explorer_reward)
-    else:
-        chaser_reward = tl.where(collision, -0.1, chaser_reward)
-        explorer_reward = tl.where(collision, -0.5, explorer_reward)
+    # translated from released agent2/agent1 to chaser/explorer. The values
+    # come from the shared env.py reward constants via constexpr arguments;
+    # the task-conditional collision rewards resolve at launch.
+    chaser_reward = tl.full((BLOCK_SIZE,), CHASER_STEP_REWARD_VALUE, tl.float32)
+    explorer_reward = tl.full((BLOCK_SIZE,), EXPLORER_STEP_REWARD_VALUE, tl.float32)
+    chaser_reward = tl.where(chaser_new_field, CHASER_NEW_FIELD_REWARD_VALUE, chaser_reward)
+    explorer_reward = tl.where(explorer_new_field, EXPLORER_NEW_FIELD_REWARD_VALUE, explorer_reward)
+    chaser_reward = tl.where(collision, CHASER_COLLISION_REWARD_VALUE, chaser_reward)
+    explorer_reward = tl.where(collision, EXPLORER_COLLISION_REWARD_VALUE, explorer_reward)
     active_float = active.to(tl.float32)
 
     tl.store(chaser_reward_out + batch, chaser_reward * active_float, mask=mask)
