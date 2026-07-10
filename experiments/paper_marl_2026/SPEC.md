@@ -136,7 +136,7 @@ Outputs:
 - `runs/reports/{experiment}/report.md` (mean ± std tables per task)
 - `runs/reports/{experiment}/figures/` (training curves, evaluation comparison)
 - `runs/reports/{experiment}/MANIFEST.json`
-- `runs/reports/{experiment}/neural/neural_summary.json` (single-network
+- `runs/reports/{experiment}/neural/neural_activation_summary.json` (single-network
   diagnostics: PCA participation ratio and dimensionality, hidden-state speed,
   visibility-modulated unit fraction, per rollout and aggregated social vs
   non_social)

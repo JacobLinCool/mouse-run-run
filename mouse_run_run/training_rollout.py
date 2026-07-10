@@ -79,6 +79,11 @@ def collect_rollout(
     use_index_path = config.architecture == "rnn"
     fused_pair = None
     if config.fused_agent_rollout:
+        if config.architecture not in ("rnn", "ssm"):
+            raise ValueError(
+                "fused_agent_rollout supports only the rnn and ssm architectures; "
+                f"got architecture={config.architecture!r} (disable fused_agent_rollout)"
+            )
         fused_class = _FusedAgentPair if config.architecture == "rnn" else _FusedSSMPair
         fused_pair = fused_class(
             chaser,

@@ -49,9 +49,15 @@ Expected output includes one `update=0001 ...` metrics line and a
 - `mouse_run_run/training_config.py`: training presets, device selection, and
   run configuration.
 - `mouse_run_run/training_rollout.py`: how agents collect one batch of
-  experience.
-- `mouse_run_run/ppo.py`: PPO loss, advantage calculation, and optimizer step.
+  experience, including GAE advantage calculation.
+- `mouse_run_run/ppo.py`: PPO loss and optimizer step.
 - `mouse_run_run/train.py`: the high-level training loop and checkpointing.
+- `mouse_run_run/checkpoint_loading.py`: rebuilding a trained policy pair from
+  a checkpoint (shared by evaluation, rollout collection, the viewer, and the
+  analysis scripts).
+- `mouse_run_run/experiment_runner.py`: the multi-seed experiment orchestrator
+  (attempt accounting, resume, health gating) behind
+  `scripts/run_local_experiment.py`.
 - `mouse_run_run/analysis.py` and `mouse_run_run/plsc.py`: neural-representation
   analyses.
 
@@ -287,7 +293,7 @@ variance spectrum, the PC1–PC2 hidden-state embedding colored by
 chaser-explorer distance, and collision-triggered hidden-state speed — plus a
 social vs non_social aggregate over PCA participation ratio, dimensionality,
 hidden-state speed, and the fraction of partner-visibility-modulated units.
-Statistics land in `neural_summary.json` with input hashes in `MANIFEST.json`.
+Statistics land in `neural_activation_summary.json` with input hashes in `MANIFEST.json`.
 
 `analyze_neural.py` describes one network at a time. The paper's central neural
 result (Fig. 5/6, claim C3) is about structure *shared between the two agents*,

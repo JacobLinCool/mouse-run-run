@@ -3,7 +3,7 @@
 ## Analysis Plan
 
 - Paper set: Zhang et al. (2025), "Inter-brain neural dynamics in biological and artificial intelligence systems", Nature 645, 991-1001, DOI 10.1038/s41586-025-09196-4.
-- Local source: `/Users/jacoblincool/Downloads/s41586-025-09196-4.pdf`.
+- Local source: local copy of the paper PDF (`s41586-025-09196-4.pdf`).
 - Supplementary source: official Nature supplementary PDF, `41586_2025_9196_MOESM1_ESM.pdf`.
 - Official code source: `https://github.com/hongw-lab/marl_environment_chase`, observed HEAD `aedb83715242a2e1bf2f68ed8aa5baf86d3a3fd0`.
 - Goal: replication assessment and implementation relevance for the MARL/RNN/artificial-agent part of the paper.
@@ -451,7 +451,7 @@ Recent smoke result:
 
 ## Sources
 
-- Local paper PDF: `/Users/jacoblincool/Downloads/s41586-025-09196-4.pdf`.
+- Local paper PDF: local copy of `s41586-025-09196-4.pdf`.
 - Nature article page: https://www.nature.com/articles/s41586-025-09196-4.
 - Official supplementary PDF: https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-025-09196-4/MediaObjects/41586_2025_9196_MOESM1_ESM.pdf.
 - Official MARL code: https://github.com/hongw-lab/marl_environment_chase.

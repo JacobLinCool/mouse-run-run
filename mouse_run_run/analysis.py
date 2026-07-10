@@ -4,7 +4,8 @@ Implements the paper's shared-dimension and event-decoding analyses plus a
 cross-model representation comparison:
 
 - PLSC: partial least squares correlation between the two agents' hidden
-  states, with circular-shift permutation significance.
+  states, with permutation-null significance (episode-shuffle and
+  circular-shift nulls, via the shared estimator in plsc.py).
 - Event decoding: linear-classifier balanced accuracy for collision and
   approach/escape events from single-agent hidden states.
 - Replay + linear CKA: teacher-force one rollout's observations through any
