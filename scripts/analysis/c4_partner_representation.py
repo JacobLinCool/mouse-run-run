@@ -125,8 +125,12 @@ def main() -> None:
                 m["update"] = _update_of(ckpt)
                 m["is_latest"] = ckpt.stem in ("latest", "final")
                 trend.append(m)
+                if m["partner_unique"] is None:
+                    detail = "skipped (exploded hidden states)"
+                else:
+                    detail = f"partner_unique={m['partner_unique']:.4f}"
                 print(
-                    f"{task}/seed_{seed:04d} u={m['update']}: partner_unique={m['partner_unique']:.4f} coll={m['collisions_per_episode']:.1f}",
+                    f"{task}/seed_{seed:04d} u={m['update']}: {detail} coll={m['collisions_per_episode']:.1f}",
                     flush=True,
                 )
             results[task].append({"seed": seed, "trend": trend})
