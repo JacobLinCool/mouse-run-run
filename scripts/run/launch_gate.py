@@ -8,6 +8,7 @@ from typing import Any
 
 from mouse_run_run.provenance import collect_provenance, git_info, hash_file, write_json_atomic
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 PRIMARY_EXPECTATIONS = {
     "updates": 20_000,
@@ -69,6 +70,11 @@ OFFICIAL_LEARNER_EXPECTATIONS = {
     "rnn_initialization": "pytorch_default",
 }
 
+# The audited upstream contract value ([RAY-PPO-CONFIG]); experiments that
+# intentionally deviate declare recurrent_l2_coef in their committed config
+# under experiments/*/configs/.
+OFFICIAL_RECURRENT_L2_DEFAULT = 3.0
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -84,6 +90,9 @@ def main() -> None:
 
     config = _read_json(args.config)
     spec_path = Path(config.get("experiment_spec", ""))
+    if not spec_path.is_absolute():
+        # Configs record repo-root-relative spec paths.
+        spec_path = REPO_ROOT / spec_path
     checks = []
     checks.append(_check_path("experiment_spec", spec_path))
     checks.append(_check_config_schema(config))
@@ -114,9 +123,9 @@ def main() -> None:
         "experiment_spec_sha256": hash_file(spec_path) if spec_path.exists() else None,
         "triton_equivalence": str(args.triton_equivalence) if args.triton_equivalence else None,
         "checks": checks,
-        "provenance": collect_provenance(cwd=Path.cwd()),
+        "provenance": collect_provenance(cwd=REPO_ROOT),
     }
-    output = args.output or Path("runs") / config.get("experiment", "unknown-experiment") / "launch_gate.json"
+    output = args.output or REPO_ROOT / "runs" / config.get("experiment", "unknown-experiment") / "launch_gate.json"
     write_json_atomic(output, record)
     print(json.dumps(record, indent=2, sort_keys=True))
     if not ok:
@@ -187,15 +196,19 @@ def _check_primary_expectations(config: dict[str, Any]) -> list[dict[str, Any]]:
                     "detail": {"expected": expected, "actual": actual},
                 }
             )
-        expected_l2 = (
-            0.3 if "methods" in str(config.get("experiment", "")) else 3.0
+        expected_l2, expected_l2_source = _expected_recurrent_l2(
+            str(config.get("experiment", ""))
         )
-        actual_l2 = config.get("recurrent_l2_coef", 3.0)
+        actual_l2 = config.get("recurrent_l2_coef", OFFICIAL_RECURRENT_L2_DEFAULT)
         checks.append(
             {
                 "name": "official_learner_recurrent_l2_coef",
                 "ok": actual_l2 == expected_l2,
-                "detail": {"expected": expected_l2, "actual": actual_l2},
+                "detail": {
+                    "expected": expected_l2,
+                    "actual": actual_l2,
+                    "expected_source": expected_l2_source,
+                },
             }
         )
     checks.append(
@@ -220,6 +233,24 @@ def _check_primary_expectations(config: dict[str, Any]) -> list[dict[str, Any]]:
         }
     )
     return checks
+
+
+def _expected_recurrent_l2(experiment: str) -> tuple[float, str]:
+    """Expected recurrent_l2_coef for an experiment, read from its committed
+    config under experiments/*/configs/ (an omitted key means the audited
+    official value). Falls back to the official value for experiments with no
+    committed config."""
+    for candidate in sorted(REPO_ROOT.glob("experiments/*/configs/*.json")):
+        try:
+            declared = _read_json(candidate)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if declared.get("experiment") == experiment:
+            return (
+                declared.get("recurrent_l2_coef", OFFICIAL_RECURRENT_L2_DEFAULT),
+                str(candidate),
+            )
+    return OFFICIAL_RECURRENT_L2_DEFAULT, "official_code preset default"
 
 
 def _check_device(config: dict[str, Any]) -> dict[str, Any]:
@@ -251,7 +282,7 @@ def _check_triton(path: Path) -> dict[str, Any]:
             "detail": {"path": str(path), "error": repr(exc)},
         }
     record_git = data.get("provenance", {}).get("git", {})
-    current_git = git_info(Path.cwd())
+    current_git = git_info(REPO_ROOT)
     record_sha = record_git.get("sha")
     sha_matches = record_sha is not None and record_sha == current_git.get("sha")
     # The equivalence record only certifies the code it was produced from: a

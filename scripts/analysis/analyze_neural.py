@@ -30,6 +30,7 @@ from typing import Any
 
 import torch
 
+from _common import REPO_ROOT, REPORTS_ROOT
 from mouse_run_run.provenance import collect_provenance, hash_file, write_json_atomic
 from mouse_run_run.serialization import ROLLOUT_FORMAT, read_metadata
 
@@ -103,7 +104,9 @@ def main() -> None:
         "figures": [record["figure"] for record in records if record.get("figure")]
         + ([aggregate_figure] if aggregate_figure else []),
     }
-    summary_path = output_root / "neural_summary.json"
+    # Distinct name: neural_analyses.py writes a differently-shaped
+    # neural_summary.json (the one the viewer reads) under runs/analyses.
+    summary_path = output_root / "neural_activation_summary.json"
     write_json_atomic(summary_path, summary)
 
     manifest = {
@@ -116,7 +119,7 @@ def main() -> None:
             "figures": summary["figures"],
         },
         "analysis_script": str(Path(__file__).resolve()),
-        "provenance": collect_provenance(cwd=Path.cwd()),
+        "provenance": collect_provenance(cwd=REPO_ROOT),
     }
     write_json_atomic(output_root / "MANIFEST.json", manifest)
     print(json.dumps({"summary": str(summary_path), "rollouts": len(records)}, indent=2))
@@ -142,8 +145,16 @@ def _discover_rollouts(paths: list[Path]) -> list[Path]:
 
 
 def _default_output_root(paths: list[Path]) -> Path:
-    name = paths[0].stem if paths[0].is_file() else paths[0].name
-    return Path("runs/reports") / name / "neural"
+    first = paths[0].resolve()
+    if paths[0].is_file():
+        name = first.stem
+    elif first.name == "paper_rollouts":
+        # Canonical layout runs/<experiment>/paper_rollouts: name the report
+        # after the experiment, not the rollout subdirectory.
+        name = first.parent.name
+    else:
+        name = first.name
+    return REPORTS_ROOT / name / "neural"
 
 
 # ---------------------------------------------------------------------------

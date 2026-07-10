@@ -20,10 +20,12 @@ from pathlib import Path
 
 import torch
 
+from _common import ANALYSES_ROOT, REPO_ROOT, RUNS_ROOT, manifest_sidecar, write_manifest
 from mouse_run_run.analysis import (
     load_rollout,
     random_variance_basis,
     shared_dimension_basis,
+    valid_episode_indices,
 )
 from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.env import BatchedChaseEnv
@@ -90,8 +92,8 @@ def perturbed_eval(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("rollout_root", type=Path, nargs="?", default=Path("runs/mouse-run-run-1/paper_rollouts"))
-    parser.add_argument("--output", type=Path, default=Path("runs/analyses/c5_perturbation.json"))
+    parser.add_argument("rollout_root", type=Path, nargs="?", default=RUNS_ROOT / "mouse-run-run-1" / "paper_rollouts")
+    parser.add_argument("--output", type=Path, default=ANALYSES_ROOT / "c5_perturbation.json")
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--max-steps", type=int, default=100)
     parser.add_argument("--top-k", type=int, default=10)
@@ -102,17 +104,21 @@ def main() -> None:
 
     device = select_device(args.device)
     units = []
+    inputs: list[Path] = []
     for ro in sorted(args.rollout_root.glob("*.safetensors")):
         meta, tensors = load_rollout(ro)
+        inputs.append(ro)
         config = meta.get("checkpoint_config") or {}
         task = (config.get("env") or {}).get("task")
         if task != "social":
             continue
-        from mouse_run_run.analysis import valid_episode_indices
-
         if len(valid_episode_indices(tensors)) < 3:
             continue
         checkpoint = Path(meta["checkpoint"])
+        if not checkpoint.is_absolute():
+            # Rollout metadata records repo-root-relative checkpoint paths.
+            checkpoint = REPO_ROOT / checkpoint
+        inputs.append(checkpoint)
         shared = torch.tensor(shared_dimension_basis(tensors, top_k=args.top_k), dtype=torch.float32)
         control = torch.tensor(random_variance_basis(tensors, top_k=args.random_k, seed=args.seed), dtype=torch.float32)
         base = perturbed_eval(checkpoint, None, episodes=args.episodes, max_steps=args.max_steps, device=device, seed=args.seed)
@@ -137,9 +143,22 @@ def main() -> None:
         "seed": args.seed,
         "units": units,
         "summary": _summarize(units),
-        "provenance": collect_provenance(cwd=Path.cwd()),
+        "provenance": collect_provenance(cwd=REPO_ROOT),
     }
     write_json_atomic(args.output, payload)
+    write_manifest(
+        manifest_sidecar(args.output),
+        script=Path(__file__),
+        inputs=inputs,
+        outputs={"analysis": args.output},
+        extra={
+            "episodes": args.episodes,
+            "max_steps": args.max_steps,
+            "top_k": args.top_k,
+            "random_k": args.random_k,
+            "seed": args.seed,
+        },
+    )
     print(json.dumps(payload["summary"], indent=2))
 
 

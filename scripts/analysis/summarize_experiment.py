@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from _common import REPO_ROOT, REPORTS_ROOT
 from mouse_run_run.provenance import collect_provenance, hash_file, read_jsonl, write_json_atomic
 
 
@@ -28,7 +29,7 @@ def main() -> None:
     args = parser.parse_args()
 
     tables_root = args.tables_root
-    output_root = args.output_root or Path("runs/reports") / tables_root.name
+    output_root = args.output_root or REPORTS_ROOT / tables_root.resolve().name
     output_root.mkdir(parents=True, exist_ok=True)
 
     runs = read_jsonl(tables_root / "runs.jsonl")
@@ -76,7 +77,7 @@ def main() -> None:
             if Path(figure["path"]).exists()
         },
         "analysis_script": str(Path(__file__).resolve()),
-        "provenance": collect_provenance(cwd=Path.cwd()),
+        "provenance": collect_provenance(cwd=REPO_ROOT),
     }
     write_json_atomic(output_root / "MANIFEST.json", manifest)
     print(json.dumps(manifest, indent=2, sort_keys=True))
@@ -242,7 +243,13 @@ def _plot_training_curves(
     for row in runs:
         if not row.get("is_latest_successful"):
             continue
-        metrics_path = Path(str(row.get("run_dir", ""))) / "metrics.jsonl"
+        run_dir = Path(str(row.get("run_dir", "")))
+        if not run_dir.is_absolute():
+            # Tables built before run_dir normalization store repo-root-relative
+            # paths; resolve them so figures do not silently lose data when the
+            # script runs from another cwd.
+            run_dir = REPO_ROOT / run_dir
+        metrics_path = run_dir / "metrics.jsonl"
         if not metrics_path.exists():
             continue
         pairs_read += 1

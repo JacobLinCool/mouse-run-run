@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from _common import ANALYSES_ROOT, REPO_ROOT, RUNS_ROOT, manifest_sidecar, write_manifest
 from mouse_run_run.analysis import chaser_action_weight, partner_representation
 from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.provenance import collect_provenance, write_json_atomic
@@ -94,8 +95,8 @@ def _training_checkpoints(unit_dir: Path, points: int) -> list[Path]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("experiment_root", type=Path, nargs="?", default=Path("runs/mouse-run-run-1"))
-    parser.add_argument("--output", type=Path, default=Path("runs/analyses/c4_partner_representation.json"))
+    parser.add_argument("experiment_root", type=Path, nargs="?", default=RUNS_ROOT / "mouse-run-run-1")
+    parser.add_argument("--output", type=Path, default=ANALYSES_ROOT / "c4_partner_representation.json")
     parser.add_argument("--episodes", type=int, default=30)
     parser.add_argument("--max-steps", type=int, default=300)
     parser.add_argument("--trend-points", type=int, default=6)
@@ -105,11 +106,13 @@ def main() -> None:
 
     device = select_device(args.device)
     results = {"social": [], "non_social": []}
+    input_checkpoints: list[Path] = []
     for task in ("social", "non_social"):
         for unit_dir in sorted((args.experiment_root / task).glob("seed_*/attempt_01")):
             seed = int(unit_dir.parent.name.removeprefix("seed_"))
             trend = []
             for ckpt in _training_checkpoints(unit_dir, args.trend_points):
+                input_checkpoints.append(ckpt)
                 m = measure_checkpoint(
                     ckpt, episodes=args.episodes, max_steps=args.max_steps, device=device, seed=args.seed
                 )
@@ -136,9 +139,16 @@ def main() -> None:
         "seed": args.seed,
         "results": results,
         "summary": summary,
-        "provenance": collect_provenance(cwd=Path.cwd()),
+        "provenance": collect_provenance(cwd=REPO_ROOT),
     }
     write_json_atomic(args.output, payload)
+    write_manifest(
+        manifest_sidecar(args.output),
+        script=Path(__file__),
+        inputs=input_checkpoints,
+        outputs={"analysis": args.output},
+        extra={"episodes": args.episodes, "max_steps": args.max_steps, "seed": args.seed},
+    )
     print(json.dumps(summary, indent=2))
 
 

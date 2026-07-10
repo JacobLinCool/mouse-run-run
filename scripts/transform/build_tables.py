@@ -12,6 +12,7 @@ from safetensors import safe_open
 from mouse_run_run.health import checkpoint_health
 from mouse_run_run.provenance import collect_provenance, hash_file, write_json_atomic
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Newest record schema each table knows how to ingest. Rows written by newer
 # code are skipped with a warning instead of being silently folded into
@@ -30,7 +31,7 @@ def main() -> None:
     experiment_root = args.experiment_root
     if not experiment_root.exists():
         raise FileNotFoundError(str(experiment_root))
-    output_root = args.output_root or Path("runs/tables") / experiment_root.name
+    output_root = args.output_root or REPO_ROOT / "runs" / "tables" / experiment_root.resolve().name
     output_root.mkdir(parents=True, exist_ok=True)
 
     runs = _run_rows(experiment_root)
@@ -78,7 +79,7 @@ def main() -> None:
         },
         "panel_path": str(output_root / "panels.json"),
         "transform_script": str(Path(__file__).resolve()),
-        "provenance": collect_provenance(cwd=Path.cwd()),
+        "provenance": collect_provenance(cwd=REPO_ROOT),
     }
     write_json_atomic(output_root / "MANIFEST.json", manifest)
     print(json.dumps(manifest, indent=2, sort_keys=True))
@@ -105,8 +106,10 @@ def _run_rows(experiment_root: Path) -> list[dict[str, Any]]:
             "seed": seed,
             "unit_id": f"{task}/{seed_text}",
             "attempt_id": attempt_id,
-            "run_dir": str(run_dir),
-            "checkpoint": str(checkpoint),
+            # Resolved so downstream readers (metrics.jsonl lookups) do not
+            # depend on the cwd this transform happened to run from.
+            "run_dir": str(run_dir.resolve()),
+            "checkpoint": str(checkpoint.resolve()),
             "status": status.get("state"),
             "healthy": bool(status.get("healthy")) and health.ok,
             "checkpoint_ok": health.ok,

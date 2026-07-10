@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from _common import ANALYSES_ROOT, REPO_ROOT, RUNS_ROOT, write_manifest
 from mouse_run_run.analysis import (
     decode_balanced_accuracy,
     decoding_targets,
@@ -33,7 +34,7 @@ def main() -> None:
         "rollout_root",
         type=Path,
         nargs="?",
-        default=Path("runs/mouse-run-run-1/paper_rollouts"),
+        default=RUNS_ROOT / "mouse-run-run-1" / "paper_rollouts",
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--seed", type=int, default=0)
@@ -41,7 +42,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
 
-    output_root = args.output or Path("runs/analyses") / args.rollout_root.parent.name
+    output_root = args.output or ANALYSES_ROOT / args.rollout_root.resolve().parent.name
     output_root.mkdir(parents=True, exist_ok=True)
     records_path = output_root / "neural_records.jsonl"
 
@@ -73,9 +74,17 @@ def main() -> None:
         "permutations": args.permutations,
         "n_rollouts": len(records),
         "by_task": _summarize_by_task(records),
-        "provenance": collect_provenance(cwd=Path.cwd()),
+        "provenance": collect_provenance(cwd=REPO_ROOT),
     }
-    write_json_atomic(output_root / "neural_summary.json", summary)
+    summary_path = output_root / "neural_summary.json"
+    write_json_atomic(summary_path, summary)
+    write_manifest(
+        output_root / "MANIFEST.json",
+        script=Path(__file__),
+        inputs=rollout_paths,
+        outputs={"records": records_path, "summary": summary_path},
+        extra={"seed": args.seed, "permutations": args.permutations},
+    )
     print(json.dumps(summary["by_task"], indent=2, sort_keys=True))
 
 
