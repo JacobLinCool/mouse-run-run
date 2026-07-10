@@ -11,7 +11,13 @@ from mouse_run_run.health import (
 )
 from mouse_run_run.policy import PolicyBase, RNNActorCritic
 from mouse_run_run.training_config import TrainConfig
-from mouse_run_run.training_types import AgentRollout, LearnerState, Rollout, RolloutMetrics
+from mouse_run_run.training_types import (
+    AgentRollout,
+    LearnerState,
+    Rollout,
+    RolloutMetrics,
+    tensor_mean,
+)
 
 
 # Upstream source IDs in comments resolve to fixed commit/tag permalinks in
@@ -387,13 +393,13 @@ def _rllib_policy_update(
             name="accumulated_loss_or_gradient",
         )
 
-    mean_kl_value = _tensor_mean(kls)
+    mean_kl_value = tensor_mean(kls)
     return _PolicyUpdateStats(
-        policy_loss=_tensor_mean(policy_losses) if capture_metrics else 0.0,
-        value_loss=_tensor_mean(value_losses) if capture_metrics else 0.0,
-        entropy=_tensor_mean(entropies) if capture_metrics else 0.0,
+        policy_loss=tensor_mean(policy_losses) if capture_metrics else 0.0,
+        value_loss=tensor_mean(value_losses) if capture_metrics else 0.0,
+        entropy=tensor_mean(entropies) if capture_metrics else 0.0,
         kl=mean_kl_value,
-        grad_norm=_tensor_mean(grad_norms) if capture_metrics else 0.0,
+        grad_norm=tensor_mean(grad_norms) if capture_metrics else 0.0,
     )
 
 
@@ -597,12 +603,6 @@ def _gradient_norm(
 
 def _masked_mean(values: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
     return values[valid].sum() / valid.sum()
-
-
-def _tensor_mean(values: list[torch.Tensor]) -> float:
-    if not values:
-        return 0.0
-    return torch.stack(values).mean().item()
 
 
 def _mean(values: list[float]) -> float:

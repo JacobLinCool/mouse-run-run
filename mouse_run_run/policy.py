@@ -1,9 +1,15 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from torch import nn
+from torch.distributions import Categorical
 from torch.nn import functional as F
+
+
+# Who supplies each agent's actions during a rollout or evaluation: both
+# policies (self_play) or one side replaced by a uniform-random opponent.
+OpponentMode = Literal["self_play", "random_chaser", "random_explorer"]
 
 
 @dataclass(frozen=True)
@@ -543,3 +549,10 @@ def build_policy(
     if rnn_initialization != "modern":
         raise ValueError("rnn_initialization only applies to architecture='rnn'")
     return policy_class(input_size, hidden_size=hidden_size)
+
+
+def select_action(logits: torch.Tensor, deterministic: bool) -> torch.Tensor:
+    """Action indices from policy logits: argmax or a categorical sample."""
+    if deterministic:
+        return logits.argmax(dim=-1)
+    return Categorical(logits=logits).sample()

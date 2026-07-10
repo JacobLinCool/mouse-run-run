@@ -32,7 +32,7 @@ def hash_file(path: Path) -> str:
 
 def json_hash(value: Mapping[str, Any]) -> str:
     encoded = json.dumps(
-        _json_ready(value),
+        json_ready(value),
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -43,7 +43,7 @@ def write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_name(f"{path.name}.tmp")
     temporary_path.write_text(
-        json.dumps(_json_ready(value), indent=2, sort_keys=True) + "\n",
+        json.dumps(json_ready(value), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     temporary_path.replace(path)
@@ -52,7 +52,31 @@ def write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
 def append_jsonl(path: Path, record: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(_json_ready(record), sort_keys=True) + "\n")
+        handle.write(json.dumps(json_ready(record), sort_keys=True) + "\n")
+
+
+def read_jsonl(path: Path, *, skip_invalid: bool = False) -> list[Any]:
+    """Records from a JSONL file; [] when the file does not exist.
+
+    Blank lines are ignored. ``skip_invalid`` drops undecodable lines (e.g. a
+    torn final append) instead of raising, which is what resume scans over
+    append-only record files want.
+    """
+    if not path.exists():
+        return []
+    records: list[Any] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                if skip_invalid:
+                    continue
+                raise
+            records.append(record)
+    return records
 
 
 def provenance_block(*, cwd: Path, config: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -169,11 +193,11 @@ def _package_version(package: str) -> str | None:
         return None
 
 
-def _json_ready(value: Any) -> Any:
+def json_ready(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, Mapping):
-        return {str(key): _json_ready(item) for key, item in value.items()}
+        return {str(key): json_ready(item) for key, item in value.items()}
     if isinstance(value, tuple | list):
-        return [_json_ready(item) for item in value]
+        return [json_ready(item) for item in value]
     return value

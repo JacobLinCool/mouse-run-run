@@ -4,10 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from safetensors import SafetensorError
-
+from mouse_run_run.checkpoint_select import checkpoint_format_files
 from mouse_run_run.health import checkpoint_health
-from mouse_run_run.serialization import CHECKPOINT_FORMAT, read_metadata
 
 
 def main() -> None:
@@ -44,13 +42,7 @@ def _checkpoint_paths(paths: list[Path]) -> list[Path]:
             continue
         if not path.is_dir():
             raise FileNotFoundError(str(path))
-        for candidate in sorted(path.rglob("*.safetensors")):
-            try:
-                metadata = read_metadata(candidate)
-            except (OSError, ValueError, SafetensorError):
-                continue
-            if metadata.get("format") == CHECKPOINT_FORMAT:
-                checkpoints.append(candidate)
+        checkpoints.extend(checkpoint_format_files(path))
     return sorted(dict.fromkeys(checkpoints))
 
 

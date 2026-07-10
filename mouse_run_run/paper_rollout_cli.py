@@ -14,6 +14,7 @@ from safetensors import SafetensorError
 
 from mouse_run_run.checkpoint_select import checkpoint_identity, select_checkpoints
 from mouse_run_run.health import checkpoint_health
+from mouse_run_run.provenance import append_jsonl, read_jsonl
 from mouse_run_run.rollout import collect_rollouts
 from mouse_run_run.serialization import read_checkpoint_metadata
 from mouse_run_run.training_config import DEVICE_CHOICES
@@ -102,7 +103,7 @@ def main() -> None:
         identity = checkpoint_identity(config)
         if not health.ok:
             failure_count += 1
-            _append_record(
+            append_jsonl(
                 records_path,
                 {
                     "schema_version": 2,
@@ -139,7 +140,7 @@ def main() -> None:
         else:
             status = "ok"
             error = None
-        _append_record(
+        append_jsonl(
             records_path,
             {
                 "schema_version": 2,
@@ -166,20 +167,11 @@ def main() -> None:
 
 def _collected_checkpoints(records_path: Path) -> set[tuple[str, tuple[object, ...]]]:
     """(checkpoint, settings) pairs that already have an ok rollout record."""
-    if not records_path.exists():
-        return set()
-    collected: set[tuple[str, tuple[object, ...]]] = set()
-    with records_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if record.get("status") == "ok":
-                collected.add((str(record.get("checkpoint")), _settings_key(record)))
-    return collected
+    return {
+        (str(record.get("checkpoint")), _settings_key(record))
+        for record in read_jsonl(records_path, skip_invalid=True)
+        if record.get("status") == "ok"
+    }
 
 
 def _settings_key(values: Mapping[str, Any]) -> tuple[object, ...]:
@@ -188,12 +180,6 @@ def _settings_key(values: Mapping[str, Any]) -> tuple[object, ...]:
         default if values.get(field) is None else values.get(field)
         for field, default in _RESUME_KEY_FIELDS
     )
-
-
-def _append_record(path: Path, record: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 def _output_stem(path: Path) -> str:

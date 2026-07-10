@@ -7,6 +7,7 @@ from typing import Any, Literal
 import torch
 
 from mouse_run_run.env import GridWorldConfig, PartnerVisibility, SpawnMode, TaskName
+from mouse_run_run.provenance import json_ready
 
 
 # Source IDs used below are defined with fixed commit/tag permalinks in
@@ -411,7 +412,7 @@ def configure_device_math(device: torch.device, config: TrainConfig) -> None:
 
 
 def checkpoint_config(config: TrainConfig) -> dict[str, object]:
-    return _json_ready(asdict(config))
+    return json_ready(asdict(config))
 
 
 def validate_train_config(config: TrainConfig) -> None:
@@ -440,13 +441,3 @@ def validate_train_config(config: TrainConfig) -> None:
             raise ValueError("sgd_minibatch_size must be larger than max_seq_len")
         if config.batch_size * config.env.max_steps < config.sgd_minibatch_size:
             raise ValueError("train batch must contain at least one SGD minibatch")
-
-
-def _json_ready(value: object) -> object:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, tuple | list):
-        return [_json_ready(item) for item in value]
-    return value

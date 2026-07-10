@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from mouse_run_run.provenance import provenance_block
+from mouse_run_run.provenance import append_jsonl, json_ready, provenance_block, write_json_atomic
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -85,7 +85,7 @@ class TrainingObserver:
 
         if self.run_dir:
             self.run_dir.mkdir(parents=True, exist_ok=True)
-            _write_json_atomic(
+            write_json_atomic(
                 self.run_dir / "config.json",
                 {**config, "provenance": provenance_block(cwd=Path.cwd(), config=config)},
             )
@@ -98,7 +98,7 @@ class TrainingObserver:
                 raise RuntimeError("tensorboard is required for TensorBoard logging.")
             self.tensorboard_dir.mkdir(parents=True, exist_ok=True)
             self.writer = SummaryWriter(str(self.tensorboard_dir))
-            self.writer.add_text("config/json", json.dumps(_json_ready(config), indent=2), 0)
+            self.writer.add_text("config/json", json.dumps(json_ready(config), indent=2), 0)
 
     def due(self) -> bool:
         if not self.enabled:
@@ -128,10 +128,9 @@ class TrainingObserver:
             error=error,
         )
         if self.metrics_path:
-            with self.metrics_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(_json_ready(snapshot), sort_keys=True) + "\n")
+            append_jsonl(self.metrics_path, snapshot)
         if self.status_path:
-            _write_json_atomic(self.status_path, snapshot)
+            write_json_atomic(self.status_path, snapshot)
         if self.writer:
             self._write_tensorboard(snapshot, metrics)
             self.writer.flush()
@@ -219,26 +218,6 @@ class TrainingObserver:
         for key, tag in HEALTH_TAGS.items():
             self.writer.add_scalar(tag, metrics[key], step)
         self.writer.add_scalar("health/is_failed", 1.0 if snapshot["state"] == "failed" else 0.0, step)
-
-
-def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(f"{path.name}.tmp")
-    temporary_path.write_text(
-        json.dumps(_json_ready(value), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary_path.replace(path)
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, Mapping):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, tuple | list):
-        return [_json_ready(item) for item in value]
-    return value
 
 
 def _metrics_are_finite(metrics: Mapping[str, float]) -> bool:

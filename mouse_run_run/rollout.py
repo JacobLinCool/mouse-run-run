@@ -4,14 +4,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
-from torch.distributions import Categorical
 
 from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.checkpoint_select import checkpoint_identity
 from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import ACTION_COUNT, BatchedChaseEnv, GridWorldConfig
-from mouse_run_run.evaluate import OpponentMode
-from mouse_run_run.policy import PolicyBase
+from mouse_run_run.policy import OpponentMode, PolicyBase, select_action
 from mouse_run_run.serialization import save_rollout
 from mouse_run_run.training_config import select_device
 
@@ -164,11 +162,11 @@ def collect_batch(
         if opponent_mode == "random_chaser":
             chaser_action = torch.randint(ACTION_COUNT, (batch_size,), device=device)
         else:
-            chaser_action = _select_action(chaser_output.logits, deterministic)
+            chaser_action = select_action(chaser_output.logits, deterministic)
         if opponent_mode == "random_explorer":
             explorer_action = torch.randint(ACTION_COUNT, (batch_size,), device=device)
         else:
-            explorer_action = _select_action(explorer_output.logits, deterministic)
+            explorer_action = select_action(explorer_output.logits, deterministic)
 
         result = env.step(chaser_action, explorer_action)
         records["chaser_observation"].append(chaser_observation)
@@ -225,9 +223,3 @@ def _concat_chunks(chunks: list[dict[str, torch.Tensor]]) -> dict[str, torch.Ten
         )
         for key in keys
     }
-
-
-def _select_action(logits: torch.Tensor, deterministic: bool) -> torch.Tensor:
-    if deterministic:
-        return logits.argmax(dim=-1)
-    return Categorical(logits=logits).sample()

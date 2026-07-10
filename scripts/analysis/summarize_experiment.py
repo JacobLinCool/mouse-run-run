@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from mouse_run_run.provenance import collect_provenance, hash_file, write_json_atomic
+from mouse_run_run.provenance import collect_provenance, hash_file, read_jsonl, write_json_atomic
 
 
 # Match the viewer palette so figures and the interactive viewer read the same.
@@ -31,9 +31,9 @@ def main() -> None:
     output_root = args.output_root or Path("runs/reports") / tables_root.name
     output_root.mkdir(parents=True, exist_ok=True)
 
-    runs = _read_jsonl(tables_root / "runs.jsonl")
-    evaluations = _read_jsonl(tables_root / "evaluations.jsonl")
-    exclusions = _read_jsonl(tables_root / "exclusions.jsonl")
+    runs = read_jsonl(tables_root / "runs.jsonl")
+    evaluations = read_jsonl(tables_root / "evaluations.jsonl")
+    exclusions = read_jsonl(tables_root / "exclusions.jsonl")
 
     figures = [] if args.no_figures else _generate_figures(output_root, runs, evaluations)
 
@@ -247,7 +247,7 @@ def _plot_training_curves(
             continue
         pairs_read += 1
         task = str(row.get("task"))
-        for record in _read_jsonl(metrics_path):
+        for record in read_jsonl(metrics_path):
             update = record.get("update")
             metrics = record.get("metrics") or {}
             if update is None:
@@ -494,17 +494,6 @@ def _mean_std(values: list[float]) -> dict[str, float | int | None]:
         "min": min(values),
         "max": max(values),
     }
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                rows.append(json.loads(line))
-    return rows
 
 
 if __name__ == "__main__":

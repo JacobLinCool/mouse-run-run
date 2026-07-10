@@ -344,23 +344,6 @@ def linear_cka(x: np.ndarray, y: np.ndarray) -> float:
     return float(cross / normalizer)
 
 
-def replay_cka(
-    rollout_tensors: dict[str, torch.Tensor],
-    checkpoint: Path,
-    *,
-    agent: str = "chaser",
-) -> float:
-    """CKA between a rollout's recorded hidden states and the states another
-    checkpoint's network produces on the identical observation stream."""
-    indices = valid_episode_indices(rollout_tensors)
-    observations = rollout_tensors[f"{agent}_observation"][:, indices]
-    recorded = rollout_tensors[f"{agent}_hidden"][:, indices]
-    replayed = replay_hidden(checkpoint, observations, agent=agent)
-    recorded_flat = recorded.reshape(-1, recorded.shape[-1]).double().numpy()
-    replayed_flat = replayed.reshape(-1, replayed.shape[-1]).double().numpy()
-    return linear_cka(recorded_flat, replayed_flat)
-
-
 # ---------------------------------------------------------------------------
 # C4: partner representation in the neural action subspace
 # ---------------------------------------------------------------------------

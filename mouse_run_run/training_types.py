@@ -56,6 +56,13 @@ class LearnerState:
 
 
 
+def tensor_mean(values: list[torch.Tensor]) -> float:
+    """Mean of a list of scalar tensors as a float; 0.0 for an empty list."""
+    if not values:
+        return 0.0
+    return torch.stack(values).mean().item()
+
+
 def empty_metrics() -> RolloutMetrics:
     return RolloutMetrics(
         collisions_per_episode=0.0,

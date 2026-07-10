@@ -44,7 +44,7 @@ def select_checkpoints(paths: list[Path], *, all_checkpoints: bool = False) -> l
         if not path.is_dir():
             raise FileNotFoundError(str(path))
         if all_checkpoints:
-            checkpoints.extend(_format_checkpoints(path))
+            checkpoints.extend(checkpoint_format_files(path))
             continue
         unit_checkpoints = latest_successful_unit_checkpoints(path)
         if unit_checkpoints:
@@ -52,7 +52,7 @@ def select_checkpoints(paths: list[Path], *, all_checkpoints: bool = False) -> l
             continue
         checkpoints.extend(
             candidate
-            for candidate in _format_checkpoints(path)
+            for candidate in checkpoint_format_files(path)
             if not _is_mid_training(candidate)
         )
     return sorted(dict.fromkeys(checkpoints))
@@ -96,7 +96,8 @@ def checkpoint_identity(config: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _format_checkpoints(root: Path) -> list[Path]:
+def checkpoint_format_files(root: Path) -> list[Path]:
+    """Every checkpoint-format safetensors file under ``root``, sorted."""
     checkpoints = []
     for candidate in sorted(root.rglob("*.safetensors")):
         try:

@@ -15,6 +15,7 @@ from safetensors import SafetensorError
 from mouse_run_run.checkpoint_select import checkpoint_identity, select_checkpoints
 from mouse_run_run.evaluate import evaluate_checkpoint
 from mouse_run_run.health import CheckpointHealth, checkpoint_health
+from mouse_run_run.provenance import read_jsonl
 from mouse_run_run.serialization import read_checkpoint_metadata
 from mouse_run_run.training_config import DEVICE_CHOICES
 
@@ -175,27 +176,15 @@ def main() -> None:
 
 def _evaluated_keys(output: Path) -> set[tuple[str, str, tuple[object, ...]]]:
     """(checkpoint, opponent_mode, settings) triples with an ok record."""
-    if not output.exists():
-        return set()
-    keys: set[tuple[str, str, tuple[object, ...]]] = set()
-    with output.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if record.get("status") != "ok":
-                continue
-            keys.add(
-                (
-                    str(record.get("checkpoint")),
-                    str(record.get("opponent_mode")),
-                    _settings_key(record),
-                )
-            )
-    return keys
+    return {
+        (
+            str(record.get("checkpoint")),
+            str(record.get("opponent_mode")),
+            _settings_key(record),
+        )
+        for record in read_jsonl(output, skip_invalid=True)
+        if record.get("status") == "ok"
+    }
 
 
 def _settings_key(values: Mapping[str, Any]) -> tuple[object, ...]:

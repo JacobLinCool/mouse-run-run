@@ -1,18 +1,13 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 import torch
-from torch.distributions import Categorical
 
 from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import ACTION_COUNT, BatchedChaseEnv, GridWorldConfig
-from mouse_run_run.policy import PolicyBase
+from mouse_run_run.policy import OpponentMode, PolicyBase, select_action
 from mouse_run_run.training_config import select_device
-
-
-OpponentMode = Literal["self_play", "random_chaser", "random_explorer"]
 
 
 @dataclass(frozen=True)
@@ -152,13 +147,13 @@ def _evaluate_batch(
             chaser_action = torch.randint(ACTION_COUNT, (batch_size,), device=device)
         else:
             chaser_output = chaser(chaser_observation, chaser_hidden)
-            chaser_action = _select_action(chaser_output.logits, deterministic)
+            chaser_action = select_action(chaser_output.logits, deterministic)
             chaser_hidden = chaser_output.state
         if opponent_mode == "random_explorer":
             explorer_action = torch.randint(ACTION_COUNT, (batch_size,), device=device)
         else:
             explorer_output = explorer(explorer_observation, explorer_hidden)
-            explorer_action = _select_action(explorer_output.logits, deterministic)
+            explorer_action = select_action(explorer_output.logits, deterministic)
             explorer_hidden = explorer_output.state
 
         result = env.step(chaser_action, explorer_action)
@@ -208,9 +203,3 @@ def _evaluate_batch(
         chaser_stuck_run_steps=degeneracy["chaser_stuck_run_steps"].float().mean().item(),
         explorer_stuck_run_steps=degeneracy["explorer_stuck_run_steps"].float().mean().item(),
     )
-
-
-def _select_action(logits: torch.Tensor, deterministic: bool) -> torch.Tensor:
-    if deterministic:
-        return logits.argmax(dim=-1)
-    return Categorical(logits=logits).sample()

@@ -4,7 +4,13 @@ from mouse_run_run.env import ACTION_COUNT, BatchedChaseEnv
 from mouse_run_run.health import module_max_abs
 from mouse_run_run.policy import PolicyBase, PolicyOutput, RNNActorCritic
 from mouse_run_run.training_config import TrainConfig
-from mouse_run_run.training_types import AgentRollout, Rollout, RolloutMetrics, empty_metrics
+from mouse_run_run.training_types import (
+    AgentRollout,
+    Rollout,
+    RolloutMetrics,
+    empty_metrics,
+    tensor_mean,
+)
 
 
 @torch.no_grad()
@@ -257,8 +263,8 @@ def collect_rollout(
             chaser_new_fields=chaser_new_field_tensor.float().sum(dim=0).mean().item(),
             explorer_new_fields=explorer_new_field_tensor.float().sum(dim=0).mean().item(),
             final_distance=distance_tensor[-1].mean().item(),
-            chaser_subspace_norm=_mean_or_zero(chaser_subspace_norms),
-            explorer_subspace_norm=_mean_or_zero(explorer_subspace_norms),
+            chaser_subspace_norm=tensor_mean(chaser_subspace_norms),
+            explorer_subspace_norm=tensor_mean(explorer_subspace_norms),
             policy_loss=0.0,
             value_loss=0.0,
             entropy=0.0,
@@ -585,9 +591,3 @@ def _build_grid_observations(
         visible_other_positions[:, 1],
     ] = 1.0
     return observations.flatten(start_dim=2)
-
-
-def _mean_or_zero(values: list[torch.Tensor]) -> float:
-    if not values:
-        return 0.0
-    return torch.stack(values).mean().item()

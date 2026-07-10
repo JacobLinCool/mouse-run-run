@@ -13,8 +13,8 @@ from torch.nn import functional as F
 from mouse_run_run.checkpoint_loading import load_policy_pair
 from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import ACTION_COUNT, ACTION_DELTA_VALUES, BatchedChaseEnv
-from mouse_run_run.evaluate import OpponentMode
 from mouse_run_run.plsc import compute_plsc, project_norms, shared_variance_fraction
+from mouse_run_run.policy import OpponentMode, select_action
 from mouse_run_run.rollout import collect_batch
 from mouse_run_run.serialization import CHECKPOINT_FORMAT, read_metadata
 from mouse_run_run.training_config import select_device
@@ -507,8 +507,8 @@ def generate_trajectory(
         explorer_output = explorer(explorer_observation, explorer_hidden)
         chaser_probs = F.softmax(chaser_output.logits, dim=-1)
         explorer_probs = F.softmax(explorer_output.logits, dim=-1)
-        chaser_action = _select_action(chaser_probs, deterministic)
-        explorer_action = _select_action(explorer_probs, deterministic)
+        chaser_action = select_action(chaser_output.logits, deterministic)
+        explorer_action = select_action(explorer_output.logits, deterministic)
         if opponent_mode == "random_chaser":
             chaser_action = torch.randint(ACTION_COUNT, (1,), device=device)
         elif opponent_mode == "random_explorer":
@@ -754,12 +754,6 @@ def _frame(
             "explorer": explorer_subspace_norm,
         },
     }
-
-
-def _select_action(probabilities: torch.Tensor, deterministic: bool) -> torch.Tensor:
-    if deterministic:
-        return probabilities.argmax(dim=-1)
-    return torch.multinomial(probabilities, num_samples=1).squeeze(1)
 
 
 def _movement(
