@@ -7,6 +7,9 @@ import triton.language as tl
 from mouse_run_run.env import BatchedChaseEnv, TrainingStepResult
 
 
+# [LOCAL-CALIBRATION] Triton is a local acceleration path, not part of the
+# paper or released implementation. Its semantics are gated against env.py;
+# upstream source IDs resolve in the official-dynamics SPEC source registry.
 def triton_step_training(
     env: BatchedChaseEnv,
     chaser_action: torch.Tensor,
@@ -53,7 +56,6 @@ def triton_step_training(
         MAX_STEPS=env.config.max_steps,
         VISION_RADIUS=env.config.vision_radius,
         TASK_ID=0 if env.config.task == "social" else 1,
-        VISIBILITY_ID=_visibility_id(env.config.partner_visibility),
     )
     return TrainingStepResult(
         chaser_reward=chaser_reward,
@@ -69,18 +71,9 @@ def triton_step_training(
     )
 
 
-def _visibility_id(value: str) -> int:
-    if value == "partial":
-        return 0
-    if value == "none":
-        return 1
-    if value == "full":
-        return 2
-    raise ValueError(f"Unsupported partner visibility: {value}")
-
-
 @triton.jit
 def _action_delta(action: tl.tensor) -> tuple[tl.tensor, tl.tensor]:
+    # [OFFICIAL-ARENAS]: 0=up, 1=right, 2=down, 3=left.
     row_delta = tl.where(action == 0, -1, tl.where(action == 2, 1, 0))
     col_delta = tl.where(action == 1, 1, tl.where(action == 3, -1, 0))
     return row_delta, col_delta
@@ -112,7 +105,6 @@ def _step_training_kernel(
     MAX_STEPS: tl.constexpr,
     VISION_RADIUS: tl.constexpr,
     TASK_ID: tl.constexpr,
-    VISIBILITY_ID: tl.constexpr,
 ) -> None:
     batch = tl.arange(0, BLOCK_SIZE)
     mask = batch < batch_size
@@ -126,6 +118,7 @@ def _step_training_kernel(
     old_done = tl.load(done_state + batch, mask=mask, other=1).to(tl.int1)
     active = ~old_done
 
+    # [OFFICIAL-ARENAS]: agent2=chaser moves before agent1=explorer.
     chaser_action_value = tl.load(chaser_action + batch, mask=mask, other=0)
     chaser_row_delta, chaser_col_delta = _action_delta(chaser_action_value)
     chaser_candidate_row = tl.minimum(
@@ -198,13 +191,10 @@ def _step_training_kernel(
 
     abs_row = tl.abs(chaser_next_row - explorer_next_row)
     abs_col = tl.abs(chaser_next_col - explorer_next_col)
-    if VISIBILITY_ID == 1:
-        visible = active & False
-    elif VISIBILITY_ID == 2:
-        visible = active | True
-    else:
-        visible = tl.maximum(abs_row, abs_col) <= VISION_RADIUS
+    visible = tl.maximum(abs_row, abs_col) <= VISION_RADIUS
 
+    # [PAPER-METHODS] Supplementary Table 3 and [OFFICIAL-ARENAS]; names are
+    # translated from released agent2/agent1 to chaser/explorer.
     chaser_reward = tl.full((BLOCK_SIZE,), -0.1, tl.float32)
     explorer_reward = tl.full((BLOCK_SIZE,), -0.5, tl.float32)
     chaser_reward = tl.where(chaser_new_field, 0.1, chaser_reward)

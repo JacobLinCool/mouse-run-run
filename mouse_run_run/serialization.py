@@ -14,8 +14,10 @@ class TrainingState:
     """Optimizer/RNG state needed to resume training from a checkpoint."""
 
     update: int
-    optimizer_state: dict[str, Any]
+    optimizer_states: dict[str, dict[str, Any]]
+    learner_state: dict[str, float]
     cpu_rng_state: torch.Tensor
+    minibatch_rng_state: torch.Tensor
     cuda_rng_state: torch.Tensor | None = None
 
 
@@ -105,23 +107,37 @@ def load_training_state(path: Path) -> TrainingState | None:
     if raw_state is None:
         return None
     state_metadata = _from_json(raw_state)
+    if state_metadata.get("schema_version") != 2:
+        raise ValueError(
+            f"Unsupported training-state schema in {path}: "
+            f"{state_metadata.get('schema_version')!r}"
+        )
     tensors = load_file(str(path), device="cpu")
 
-    optimizer_entries: dict[int, dict[str, Any]] = {}
-    for index_key, keys in state_metadata["optimizer_state_keys"].items():
-        entry: dict[str, Any] = {}
-        for key in keys:
-            entry[key] = tensors[f"optimizer.state.{index_key}.{key}"]
-        optimizer_entries[int(index_key)] = entry
-    optimizer_state = {
-        "state": optimizer_entries,
-        "param_groups": state_metadata["optimizer_param_groups"],
-    }
+    optimizer_states: dict[str, dict[str, Any]] = {}
+    for optimizer_name, optimizer_keys in state_metadata["optimizer_state_keys"].items():
+        optimizer_entries: dict[int, dict[str, Any]] = {}
+        for index_key, keys in optimizer_keys.items():
+            entry: dict[str, Any] = {}
+            for key in keys:
+                entry[key] = tensors[
+                    f"optimizer.{optimizer_name}.state.{index_key}.{key}"
+                ]
+            optimizer_entries[int(index_key)] = entry
+        optimizer_states[optimizer_name] = {
+            "state": optimizer_entries,
+            "param_groups": state_metadata["optimizer_param_groups"][optimizer_name],
+        }
     cuda_key = "rng.cuda"
     return TrainingState(
         update=int(state_metadata["update"]),
-        optimizer_state=optimizer_state,
+        optimizer_states=optimizer_states,
+        learner_state={
+            str(key): float(value)
+            for key, value in state_metadata["learner_state"].items()
+        },
         cpu_rng_state=tensors["rng.cpu"],
+        minibatch_rng_state=tensors["rng.minibatch"],
         cuda_rng_state=tensors.get(cuda_key),
     )
 
@@ -129,26 +145,39 @@ def load_training_state(path: Path) -> TrainingState | None:
 def _encode_training_state(
     state: TrainingState,
 ) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
-    tensors: dict[str, torch.Tensor] = {"rng.cpu": _prepare_tensor(state.cpu_rng_state)}
+    tensors: dict[str, torch.Tensor] = {
+        "rng.cpu": _prepare_tensor(state.cpu_rng_state),
+        "rng.minibatch": _prepare_tensor(state.minibatch_rng_state),
+    }
     if state.cuda_rng_state is not None:
         tensors["rng.cuda"] = _prepare_tensor(state.cuda_rng_state)
 
-    state_keys: dict[str, list[str]] = {}
-    for index, entry in state.optimizer_state.get("state", {}).items():
-        keys: list[str] = []
-        for key, value in entry.items():
-            if not isinstance(value, torch.Tensor):
-                raise ValueError(
-                    f"optimizer state entry {index}.{key} is not a tensor: {type(value)!r}"
-                )
-            tensors[f"optimizer.state.{index}.{key}"] = _prepare_tensor(value)
-            keys.append(key)
-        state_keys[str(index)] = keys
+    state_keys: dict[str, dict[str, list[str]]] = {}
+    param_groups: dict[str, list[dict[str, Any]]] = {}
+    for optimizer_name, optimizer_state in state.optimizer_states.items():
+        optimizer_keys: dict[str, list[str]] = {}
+        for index, entry in optimizer_state.get("state", {}).items():
+            keys: list[str] = []
+            for key, value in entry.items():
+                if not isinstance(value, torch.Tensor):
+                    raise ValueError(
+                        "optimizer state entry "
+                        f"{optimizer_name}.{index}.{key} is not a tensor: {type(value)!r}"
+                    )
+                tensors[
+                    f"optimizer.{optimizer_name}.state.{index}.{key}"
+                ] = _prepare_tensor(value)
+                keys.append(key)
+            optimizer_keys[str(index)] = keys
+        state_keys[optimizer_name] = optimizer_keys
+        param_groups[optimizer_name] = optimizer_state.get("param_groups", [])
 
     metadata = {
+        "schema_version": 2,
         "update": state.update,
-        "optimizer_param_groups": state.optimizer_state.get("param_groups", []),
+        "optimizer_param_groups": param_groups,
         "optimizer_state_keys": state_keys,
+        "learner_state": state.learner_state,
     }
     return tensors, metadata
 

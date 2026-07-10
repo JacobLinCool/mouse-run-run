@@ -6,8 +6,12 @@ import torch
 
 TaskName = Literal["social", "non_social"]
 PartnerVisibility = Literal["partial", "none", "full"]
+SpawnMode = Literal["full_grid", "official_exclude_last"]
 
 
+# [OFFICIAL-ARENAS] maps actions as 0=up, 1=right, 2=down, 3=left.
+# Source IDs resolve in experiments/paper_marl_official_dynamics_2026/SPEC.md,
+# "Implementation Source Registry".
 ACTION_DELTAS = torch.tensor(
     [
         [-1, 0],
@@ -21,11 +25,16 @@ ACTION_DELTAS = torch.tensor(
 
 @dataclass(frozen=True)
 class GridWorldConfig:
+    # [PAPER-METHODS], [OFFICIAL-TRAIN], [OFFICIAL-ARENAS]: 10x10 grid,
+    # 7x7 field of view (radius 3), and 100-step training episodes.
     grid_size: int = 10
     vision_radius: int = 3
     max_steps: int = 100
     task: TaskName = "social"
     partner_visibility: PartnerVisibility = "partial"
+    # full_grid is the paper-text/modern default. Official-dynamics configs
+    # explicitly select official_exclude_last; see [OFFICIAL-ARENAS].
+    spawn_mode: SpawnMode = "full_grid"
 
     @property
     def observation_size(self) -> int:
@@ -121,14 +130,25 @@ class BatchedChaseEnv:
 
     def reset_state(self) -> None:
         grid_size = self.config.grid_size
+        # [OFFICIAL-ARENAS] calls np.random.randint(height - 1), whose exclusive
+        # high bound yields coordinates 0..8 on the released 10x10 arena.
+        spawn_high = (
+            grid_size - 1
+            if self.config.spawn_mode == "official_exclude_last"
+            else grid_size
+        )
+        if spawn_high < 1:
+            raise ValueError(
+                "official_exclude_last requires a grid_size of at least 2"
+            )
         self.chaser_position = torch.randint(
-            grid_size,
+            spawn_high,
             (self.batch_size, 2),
             dtype=torch.long,
             device=self.device,
         )
         self.explorer_position = torch.randint(
-            grid_size,
+            spawn_high,
             (self.batch_size, 2),
             dtype=torch.long,
             device=self.device,
@@ -138,7 +158,7 @@ class BatchedChaseEnv:
         while same_position.any():
             count = int(same_position.sum().item())
             self.explorer_position[same_position] = torch.randint(
-                grid_size,
+                spawn_high,
                 (count, 2),
                 dtype=torch.long,
                 device=self.device,
@@ -233,10 +253,10 @@ class BatchedChaseEnv:
         return self._partner_visible(self.chaser_position, self.explorer_position)
 
     def partner_visibilities(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Current-state visibility for (chaser view, explorer view)."""
+        """Physical partner-in-FOV for (chaser view, explorer view)."""
         return (
-            self._partner_visible(self.chaser_position, self.explorer_position),
-            self._partner_visible(self.explorer_position, self.chaser_position),
+            self._partner_in_fov(self.chaser_position, self.explorer_position),
+            self._partner_in_fov(self.explorer_position, self.chaser_position),
         )
 
     def _advance(
@@ -248,6 +268,8 @@ class BatchedChaseEnv:
         old_chaser_position = self.chaser_position.clone()
         old_explorer_position = self.explorer_position.clone()
 
+        # [OFFICIAL-ARENAS] agent2=chaser moves first; agent1=explorer then
+        # resolves against the chaser's updated position.
         chaser_candidate = self._candidate_position(old_chaser_position, chaser_action)
         chaser_collision = active & self._positions_equal(
             chaser_candidate,
@@ -296,8 +318,8 @@ class BatchedChaseEnv:
         old_distance = _euclidean_distance(old_chaser_position, old_explorer_position)
         chaser_partner_distance = _euclidean_distance(self.chaser_position, old_explorer_position)
         explorer_partner_distance = _euclidean_distance(self.explorer_position, old_chaser_position)
-        # Official event precedence: collision > own new field > approach/escape.
-        # A step that enters a new field never also emits approach/escape.
+        # [OFFICIAL-ARENAS] event precedence: collision > own new field >
+        # approach/escape; a new-field step never also emits approach/escape.
         chaser_approach = (
             active
             & ~chaser_collision
@@ -329,8 +351,11 @@ class BatchedChaseEnv:
         self.step_count = self.step_count + active.long()
         self.done = self.done | (self.step_count >= self.config.max_steps)
 
-        chaser_visible = self._partner_visible(self.chaser_position, self.explorer_position)
-        explorer_visible = self._partner_visible(self.explorer_position, self.chaser_position)
+        # This is a behavioral event, not an observation-channel flag. The
+        # official non-social analysis still measures physical partner-in-FOV
+        # even though the partner channel is hidden from the policy.
+        chaser_visible = self._partner_in_fov(self.chaser_position, self.explorer_position)
+        explorer_visible = self._partner_in_fov(self.explorer_position, self.chaser_position)
         return _TransitionResult(
             chaser_reward=chaser_reward,
             explorer_reward=explorer_reward,
@@ -398,6 +423,14 @@ class BatchedChaseEnv:
         offset = (own_position - other_position).abs()
         return offset.max(dim=1).values <= self.config.vision_radius
 
+    def _partner_in_fov(
+        self,
+        own_position: torch.Tensor,
+        other_position: torch.Tensor,
+    ) -> torch.Tensor:
+        offset = (own_position - other_position).abs()
+        return offset.max(dim=1).values <= self.config.vision_radius
+
     def _rewards(
         self,
         *,
@@ -406,6 +439,8 @@ class BatchedChaseEnv:
         chaser_new_field: torch.Tensor,
         explorer_new_field: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # [PAPER-METHODS] Supplementary Table 3; [OFFICIAL-ARENAS] lines that
+        # implement r1=explorer and r2=chaser. The names below use paper roles.
         if self.config.task == "social":
             chaser_collision_reward = 1.0
             explorer_collision_reward = -1.0

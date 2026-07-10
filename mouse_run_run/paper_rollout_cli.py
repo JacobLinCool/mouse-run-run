@@ -8,6 +8,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from safetensors import SafetensorError
+
 from mouse_run_run.checkpoint_select import checkpoint_identity, select_checkpoints
 from mouse_run_run.health import checkpoint_health
 from mouse_run_run.rollout import collect_rollouts
@@ -65,8 +67,19 @@ def main() -> None:
         config = None
         try:
             config, _ = read_checkpoint_metadata(checkpoint)
-        except Exception:
-            pass
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            json.JSONDecodeError,
+            SafetensorError,
+        ) as exc:
+            print(
+                f"warning: checkpoint_metadata_unreadable={checkpoint} "
+                f"error={type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
         identity = checkpoint_identity(config)
         if not health.ok:
             failure_count += 1

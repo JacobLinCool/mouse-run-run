@@ -2,20 +2,21 @@
 
 **Question.** Do different agent architectures, trained identically on the
 Zhang et al. (2025) chaser–explorer task, learn the *same* internal
-representations of the social interaction? Or does the phenomenon the paper
-reports — genuine shared neural dynamics between two independently trained
-agents — depend on the architecture?
+representations of the social interaction? More specifically, how much of the
+cross-agent alignment reported in the paper is stable across architectures,
+and how much depends on the behavioral strategy and temporal structure of a
+particular model?
 
-**Design.** Four architectures, identical in everything except the memory
-mechanism: reward structure, 10×10 world, 100-step episodes, seeds 0–9,
-analysis dimension 256, PPO settings, evaluation protocol, and analysis
-pipeline. They span a memory ladder:
+**Design.** Four architectures shared the reward structure, 10×10 world,
+100-step episodes, seeds 0–9, 256-dimensional analysis state, PPO protocol,
+evaluation procedure, and analysis code. They differed in architecture,
+parameter count, and memory mechanism:
 
 | architecture | memory mechanism | internal state at step t |
 |---|---|---|
-| MLP (`k=8` frame stack) | none (finite window) | pure function of the last 8 observations |
+| MLP (`k=8` frame stack) | finite observation window | function of the last 8 observations |
 | SSM (gated diagonal LRU) | compressed, **linear** dynamics | eigenvalue-controlled linear state |
-| RNN (paper's ReLU RNN) | compressed, **nonlinear** dynamics | chaotic nonlinear recurrence |
+| RNN (paper's ReLU RNN) | compressed, **nonlinear** dynamics | learned ReLU recurrence |
 | Transformer (2-layer causal) | none evolving; re-attends history | pre-head residual recomputed per step |
 
 Each was trained as a full 20-pair experiment (`mouse-run-run-1` for the RNN,
@@ -38,21 +39,20 @@ random chaser — lower is better escape):
 | SSM | 35.92 ± 3.56 | 0.94 | 0.45 |
 | Transformer | 41.31 ± 3.29 | 0.96 | 0.28 |
 
-All four learned role-specific social behavior (non-social controls collide
-2.7–3.4× regardless). But the **RNN converged to a qualitatively different
-strategy**: a low-vision "stealth" chaser (61% partner-in-vision, 9 collisions)
-that tracks the explorer from memory, whereas MLP/SSM/Transformer converged to
-high-vision "pursuit" chasers (93–96% vision, 27–41 collisions) that stay
-glued to the explorer. This behavioral fork is the first sign the architectures
-are not learning the same thing — and it turns out to drive the representation
-difference.
+All four learned role-specific social behavior; non-social chasers produced
+only 2.7–3.4 collisions per episode. The **RNN converged to a qualitatively
+different observable strategy**: a lower-vision chaser (61% partner-in-vision,
+9 collisions), whereas MLP/SSM/Transformer converged to high-vision pursuit
+policies (93–96% vision, 27–41 collisions). The present analyses do not
+establish whether the RNN uses memory to compensate for reduced visual access.
+They do establish that architecture and learned strategy are coupled in these
+runs, which is essential context for the representation comparison.
 
-The raw capability ranking (Transformer > SSM > MLP > RNN) is **not** the
-headline. A chaser that collides 41×/episode by never leaving the explorer's
-side is behaviorally strong but representationally shallow. The scientific
-question is about the *internal representation*, below.
+The raw capability ranking (Transformer > SSM > MLP > RNN) is not the main
+result. Performance alone does not determine whether two models use the same
+internal computation, so the remaining analyses compare their hidden states.
 
-## 2. Event decoding replicates across architectures (C2)
+## 2. Social-event decodability generalizes across architectures (C2)
 
 Linear-classifier balanced accuracy for social events decoded from single-agent
 hidden states (5-fold CV, shuffled controls ≈ 0.50 throughout):
@@ -65,9 +65,14 @@ hidden states (5-fold CV, shuffled controls ≈ 0.50 throughout):
 | Transformer | 0.847 | 0.761 | 0.759 |
 
 Every architecture encodes collision and partner approach/escape above chance
-in social agents — the paper's C2 claim is **architecture-robust**. Decoding
-accuracy tracks the memory ladder (RNN > MLP ≈ SSM > Transformer), but the
-qualitative result (social events are linearly represented) holds for all.
+in social agents. Social-event information is therefore linearly accessible
+across model classes. The original paper's selectivity control does not fully
+reproduce, however: in our RNN, non-social collision decoding was 0.765 for the
+chaser and 0.747 for the explorer, compared with 0.50 in the paper. Collision
+decodability may partly reflect each agent's own state. We consequently treat
+C2 as partially supported: the social signal generalizes, while the
+non-social control differs. Decodability also does not establish that each
+policy uses the decoded variable in the same way.
 
 ## 3. Shared dimensions: a methodological correction, then the key result (C3)
 
@@ -75,23 +80,31 @@ The paper's headline is C3: social agents develop *shared* neural dimensions
 across the two independently trained networks (PLSC). Measuring this across
 architectures exposed a confound that the analysis had to fix.
 
+For the primary RNN, the leading correlation showed the expected condition
+contrast (0.743 social versus 0.067 non-social), but the significant-dimension
+count did not: 183 dimensions were significant in social pairs and 108 in
+non-social pairs. The corresponding paper values were about 165 and 0.02.
+C3 is therefore partially supported before the additional temporal-scaffold
+analysis below: correlation strength separates conditions, whereas the
+dimension count does not.
+
 **The raw cross-agent correlation is contaminated by time-locked scaffolds.**
 The Transformer's `top_dim_correlation` was **0.957 in the non-social control**
 — higher than its social value, and higher than any architecture's social
-score. There is no partner input in the non-social task, so this cannot be
-genuine sharing. The cause: the Transformer's positional embedding makes every
-timestep a deterministic function of absolute position t; both agents' networks
-carry this identical positional scaffold, and it dominates the top singular
-dimension. The RNN and MLP have no such clean scaffold (their "clocks" are noisy
-or absent), so their raw non-social correlation stays near zero — which is
-exactly why the raw statistic *looked* fine until the Transformer exposed it.
+score. There is no partner input in the non-social task, so this value cannot be
+interpreted as partner representation. The most direct explanation is the
+Transformer's positional embedding: both agents carry a strong code for the
+same absolute timestep. The RNN and MLP do not contain the same explicit
+positional signal, so the confound is much less visible in their raw statistic.
 
 **Fix (standard in neuroscience): remove the evoked/time-locked component.**
 Subtract the across-episode mean at each timestep — the response identical
 across episodes at a given t (positional embeddings, hidden-state clocks, mean
-approach dynamics) — and run PLSC on the episode-specific residual, where
-genuine interaction lives. This removes every architecture's deterministic
-temporal scaffold uniformly, making the effect size comparable.
+approach dynamics) — and run PLSC on the episode-specific residual. The
+residual contains interaction-dependent variation as well as other
+episode-specific variation. This procedure removes every architecture's
+deterministic temporal scaffold uniformly and makes the effect sizes more
+comparable.
 
 **Aggregate residualized top-dim correlation (interaction-driven sharing):**
 
@@ -102,18 +115,17 @@ temporal scaffold uniformly, making the effect size comparable.
 | SSM | 0.642 ± 0.12 | 0.315 | 0.33 |
 | Transformer | 0.438 ± 0.08 | 0.356 | **0.08** |
 
-The MLP is the **common-input floor**: being memoryless, any cross-agent sharing
-it shows is by construction reactive (both nets responding to the same visible
-game state). That its social sharing (0.679) nearly matches the RNN's aggregate
-(0.688) is the crux — the aggregate mean *hides* the real difference. The
-Transformer's social/non-social separation collapses to 0.08 once its positional
-scaffold is removed: **its apparent sharing was mostly the scaffold**.
+The frame-stack MLP provides a **common-input floor**: it has only a short,
+fixed observation window, so its high social correlation shows how much
+alignment can arise from recent shared sensory and behavioral context. Its
+social value (0.679) nearly matches the RNN aggregate (0.688). The
+Transformer's social/non-social separation falls to 0.08 after time-mean
+subtraction, indicating that its raw statistic was strongly influenced by the
+temporal scaffold.
 
-**The discriminating view: sharing vs behavioral coupling (vision).** The MLP
-can only share when both agents see each other. So the question is whether an
-architecture achieves shared representation *at low mutual vision* — which
-requires genuine internal (memory/prediction) coupling, not common input.
-Residualized social `top_r`, split by chaser partner-in-vision:
+**Shared dimensions versus visual coupling.** We next asked whether high
+residualized correlation also occurred in pairs with limited visual access.
+Residualized social `top_r`, split by chaser partner-in-vision, was:
 
 | architecture | low vision (<40%) | high vision (≥40%) |
 |---|---:|---:|
@@ -122,13 +134,14 @@ Residualized social `top_r`, split by chaser partner-in-vision:
 | SSM | — (0 units) | 0.642 (n=9) |
 | Transformer | — (0 units) | 0.438 (n=10) |
 
-This is the result. **Only the RNN develops shared representation without the
-agents seeing each other** — 7 of its 8 analyzable social units sit below 40%
-mutual vision yet reach 0.65 residualized correlation. Every social unit of the
-other three architectures lives at high vision; their sharing is vision-gated,
-i.e. common-input-like. MLP *cannot* do otherwise (no memory). SSM and
-Transformer *have* memory mechanisms but did not use them to build low-vision
-coordination — they converged to the reactive, high-vision solution.
+Seven of the eight analyzable social RNN pairs fell below 40% partner-in-vision
+and still reached a mean residualized correlation of 0.652. All analyzable
+pairs from the other architectures occupied the high-vision regime. This shows
+that high cross-agent correlation can persist when the RNN chaser has limited
+current visual access. It does not establish a direct architecture effect,
+because the other architectures did not supply behaviorally matched low-vision
+pairs. A matched-strategy experiment is required to separate architecture,
+memory use, and sensory coupling.
 
 ## 4. Representational geometry: the RNN is the outlier (CKA)
 
@@ -144,9 +157,10 @@ invariant):
 | Transformer | 0.67 | 0.78 | 0.76 | 1.00 |
 
 The **RNN is the representational outlier** (0.64–0.68 with everything else),
-while MLP/SSM/Transformer cluster together (0.71–0.78). A third independent
-method agrees with behavior and PLSC: the RNN encodes the task differently; the
-other three converge to a more mutually similar (reactive) geometry.
+while MLP/SSM/Transformer are more similar to one another (0.71–0.78). A third
+analysis therefore agrees that the RNN's representation differs from the other
+models in these runs. CKA describes geometrical similarity; it does not by
+itself identify the computation responsible for that difference.
 
 ## 5. Degeneracy is itself an architecture property
 
@@ -158,6 +172,26 @@ MLP, and Transformer**. The linear recurrence appears to collapse toward
 fixed-point / stuck behavior more readily — a concrete failure mode of the
 linear-dynamics inductive bias on this task.
 
+## 6. Perturbation result: behavioral sensitivity without selectivity
+
+Removing the top ten shared dimensions reduced collisions in every
+architecture. However, the nominal random-basis intervention reduced
+collisions equally or more strongly:
+
+| architecture | unperturbed | shared removed | nominal random basis removed |
+|---|---:|---:|---:|
+| RNN | 4.57 | 2.44 | 1.55 |
+| MLP | 21.23 | 2.04 | 1.58 |
+| SSM | 17.21 | 4.16 | 1.36 |
+| Transformer | 10.67 | 2.05 | 1.70 |
+
+The agents are sensitive to perturbations of the shared directions, but the
+experiment does not establish a selective causal role for shared information.
+The current control basis is also not fully paper-faithful: it does not enforce
+non-overlap with the shared subspace, and its joint time permutation preserves
+the covariance used for PCA. A corrected, variance-matched control is required
+before interpreting C5.
+
 ---
 
 ## Answer to the question
@@ -165,43 +199,42 @@ linear-dynamics inductive bias on this task.
 **Different architectures do not learn the same internal representations.**
 Three independent methods converge:
 
-1. **Behavior** — the RNN alone converges to a low-vision, memory-based stealth
-   strategy; the others to high-vision reactive pursuit.
-2. **Shared dimensions (residualized, vision-conditioned)** — the RNN alone
-   develops genuine interaction-driven sharing when the agents *cannot see each
-   other*; the others' sharing is vision-gated and, for the Transformer, mostly
-   a positional scaffold once corrected.
+1. **Behavior** — the RNN converges to a lower-vision, lower-collision strategy;
+   the other architectures converge to high-vision pursuit.
+2. **Shared dimensions** — residualization exposes a large positional confound
+   in the Transformer. The RNN retains high correlation in the observed
+   low-vision regime, but the other architectures provide no behaviorally
+   matched low-vision comparison.
 3. **CKA** — the RNN is the representational outlier; the other three cluster.
 
-The paper's hallmark phenomenon — genuine internal shared dynamics between
-independently trained agents — is **not architecture-universal**. It emerged
-cleanly only in the vanilla RNN. The memoryless MLP cannot produce it (its
-sharing is the common-input floor). The SSM and Transformer, despite having the
-capacity for memory, did not: their inductive biases steered them to a reactive,
-high-vision solution whose apparent sharing is largely explained by behavioral
-and input coupling, plus (Transformer) a deterministic temporal scaffold.
+The evidence rejects the strongest invariance hypothesis: the same task and
+training budget do not force these architectures to learn the same hidden-state
+geometry. The results do not isolate architecture as the sole cause, because
+architecture changed the learned strategy and visual exposure. They support a
+more useful conclusion for AI research: representational alignment depends on
+the model, the policy it learns, and the nuisance structure retained by its
+hidden state.
 
 ## Honest confounds and limitations
 
 - **Strategy mediates representation.** The architectures converged to different
   behavioral strategies, so the representation difference is partly *mediated* by
-  strategy, not a direct architecture→representation effect. But that is itself a
-  finding: the architecture's inductive bias shapes *which* solution is found,
-  and only the RNN's solution has genuine internal shared dynamics. Isolating a
-  direct effect would require conditioning on matched behavior (e.g. training all
-  architectures to the same vision regime), which these runs do not do.
+  strategy, not a direct architecture→representation effect. Isolating a direct
+  effect requires conditioning on matched behavior, for example by training all
+  architectures to the same vision regime.
 - **Not parameter-matched.** RNN 119k, SSM 382k, MLP 477k, Transformer 1.24M
-  params (analysis dim held at 256). The RNN's distinctness is not a
-  capacity-advantage artifact — it is the *smallest* model.
+  params (analysis dim held at 256). The RNN is the smallest model, but size and
+  architecture remain confounded.
 - **Time-mean subtraction** removes any genuinely time-locked coordination along
   with the scaffold; for random-initial-position episodes the interaction timing
   is episode-specific, so this should be conservative, but it is an assumption.
 - **PLSC significant-dimension counts saturate** at these sample sizes (MLP hits
   256/256 in both conditions); the effect size (residualized top correlation),
   not the count, is the discriminating statistic and is what this report uses.
-- The **perturbation (C5)** and neural-action-space (C4) analyses are not yet run
-  across architectures; C5 in particular (does removing shared dimensions impair
-  social behavior) would test causality of the RNN's shared dimensions.
+- **C5 remains inconclusive.** The cross-architecture perturbations have been
+  run, but the nominal random control is at least as disruptive as the shared
+  intervention and its basis construction is not fully equivalent to the
+  paper's control.
 
 ## Artifacts
 

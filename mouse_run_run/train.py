@@ -1,142 +1,32 @@
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from time import perf_counter
 
 import torch
-from torch import nn
 
-from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
+from mouse_run_run.env import BatchedChaseEnv
 from mouse_run_run.health import (
     NonFiniteTrainingError,
     assert_finite_metrics,
     assert_finite_module,
-    assert_finite_tensor,
     assert_finite_tensors,
-    module_max_abs,
     require_healthy_checkpoint,
 )
 from mouse_run_run.observability import TrainingObserver
-from mouse_run_run.policy import PolicyBase, PolicyOutput, RNNActorCritic, build_policy
-from mouse_run_run.serialization import (
-    TrainingState,
-    load_checkpoint,
-    load_training_state,
-    save_checkpoint,
+from mouse_run_run.policy import PolicyBase, build_policy
+from mouse_run_run.ppo import _ppo_update
+from mouse_run_run.serialization import TrainingState, load_checkpoint, load_training_state, save_checkpoint
+from mouse_run_run.training_config import (
+    DEVICE_CHOICES as DEVICE_CHOICES,
+    TrainConfig,
+    checkpoint_config,
+    configure_device_math,
+    select_device,
+    validate_train_config,
 )
-
-
-DEVICE_CHOICES = ("auto", "cpu", "mps", "cuda")
-
-
-@dataclass(frozen=True)
-class TrainConfig:
-    updates: int = 200
-    batch_size: int = 40
-    # Agent architecture: "rnn" (paper), "mlp", "ssm", or "transformer".
-    architecture: str = "rnn"
-    hidden_size: int = 256
-    gamma: float = 0.99
-    gae_lambda: float = 0.95
-    learning_rate: float = 3e-4
-    ppo_epochs: int = 4
-    clip_epsilon: float = 0.2
-    entropy_coef: float = 0.01
-    value_coef: float = 0.5
-    # RLlib 2.2's PPO default vf_clip_param, which the official code inherited:
-    # per-sample squared value error is clamped to this bound. Without it the
-    # bootstrapped value targets can chase diverging predictions into overflow
-    # once returns jump (observed with recurrent_l2_coef=0). 0 disables.
-    value_clip: float = 10.0
-    recurrent_l2_coef: float = 0.0
-    grad_clip: float = 1.0
-    seed: int = 7
-    device: str = "cpu"
-    log_every: int = 20
-    checkpoint: Path = Path("runs/marl_ppo.safetensors")
-    checkpoint_every: int = 0
-    checkpoint_every_seconds: float = 0.0
-    run_dir: Path | None = None
-    metrics_path: Path | None = None
-    status_path: Path | None = None
-    tensorboard_dir: Path | None = None
-    status_every_seconds: float = 300.0
-    cost_per_hour: float | None = None
-    cuda_tf32: bool = True
-    subspace_metric_period: int = 1
-    triton_env_step: bool = False
-    # Run both agents' rollout forwards as one stacked batch (shared kernels
-    # via gather + bmm). Same math per agent, but kernel fusion changes
-    # floating-point reduction order, so trajectories are not bit-identical
-    # to the unfused path; action sampling stays per-agent to preserve the
-    # RNG stream layout.
-    fused_agent_rollout: bool = False
-    finite_guard: bool = True
-    experiment_id: str | None = None
-    run_id: str | None = None
-    attempt_id: str | None = None
-    resume_from: Path | None = None
-    env: GridWorldConfig = GridWorldConfig()
-
-
-@dataclass(frozen=True)
-class RolloutMetrics:
-    collisions_per_episode: float
-    chaser_return: float
-    explorer_return: float
-    chaser_partner_vision: float
-    explorer_partner_vision: float
-    chaser_new_fields: float
-    explorer_new_fields: float
-    final_distance: float
-    chaser_subspace_norm: float
-    explorer_subspace_norm: float
-    policy_loss: float
-    value_loss: float
-    entropy: float
-    approx_kl: float
-    chaser_grad_norm: float
-    explorer_grad_norm: float
-    max_param_abs: float
-
-
-@dataclass(frozen=True)
-class AgentRollout:
-    observations: torch.Tensor
-    actions: torch.Tensor
-    old_log_probs: torch.Tensor
-    old_values: torch.Tensor
-    rewards: torch.Tensor
-    advantages: torch.Tensor
-    returns: torch.Tensor
-
-
-@dataclass(frozen=True)
-class Rollout:
-    chaser: AgentRollout
-    explorer: AgentRollout
-    metrics: RolloutMetrics
-
-
-def select_device(requested: str) -> torch.device:
-    if requested == "auto":
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        if _mps_available():
-            return torch.device("mps")
-        return torch.device("cpu")
-    if requested == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA was requested but is not available.")
-    if requested == "mps" and not _mps_available():
-        raise RuntimeError("MPS was requested but is not available.")
-    if requested not in DEVICE_CHOICES:
-        raise ValueError(f"Unsupported device: {requested}")
-    return torch.device(requested)
-
-
-def _mps_available() -> bool:
-    mps_backend = getattr(torch.backends, "mps", None)
-    return bool(mps_backend and mps_backend.is_available())
+from mouse_run_run.training_rollout import _collect_rollout
+from mouse_run_run.training_types import LearnerState, Rollout, RolloutMetrics, empty_metrics
 
 
 StatusCallback = Callable[[dict[str, object]], None]
@@ -147,9 +37,10 @@ def train(
     *,
     on_status: StatusCallback | None = None,
 ) -> RolloutMetrics:
+    validate_train_config(config)
     torch.manual_seed(config.seed)
     device = select_device(config.device)
-    _configure_device_math(device, config)
+    configure_device_math(device, config)
 
     env_steps_per_update = config.batch_size * config.env.max_steps
     observer = TrainingObserver(
@@ -157,30 +48,43 @@ def train(
         metrics_path=config.metrics_path,
         status_path=config.status_path,
         tensorboard_dir=config.tensorboard_dir,
-        config=_checkpoint_config(config),
+        config=checkpoint_config(config),
         total_updates=config.updates,
         env_steps_per_update=env_steps_per_update,
         status_every_seconds=config.status_every_seconds,
         cost_per_hour=config.cost_per_hour,
         device=str(device),
     )
-    if config.fused_agent_rollout and config.architecture not in ("rnn", "ssm"):
-        raise ValueError("fused_agent_rollout is only implemented for rnn and ssm")
     env = BatchedChaseEnv(config.env, config.batch_size, device)
-    chaser = build_policy(
-        config.architecture,
-        config.env.observation_size,
-        hidden_size=config.hidden_size,
-    ).to(device)
-    explorer = build_policy(
-        config.architecture,
-        config.env.observation_size,
-        hidden_size=config.hidden_size,
-    ).to(device)
-    optimizer = torch.optim.Adam(
-        [*chaser.parameters(), *explorer.parameters()],
-        lr=config.learning_rate,
+    def make_policy() -> PolicyBase:
+        return build_policy(
+            config.architecture,
+            config.env.observation_size,
+            hidden_size=config.hidden_size,
+            rnn_initialization=config.rnn_initialization,
+        ).to(device)
+
+    if config.learner_mode == "rllib_2_2":
+        # [OFFICIAL-TRAIN] inserts policy1/explorer before policy2/chaser. The
+        # released model uses PyTorch defaults, so this order determines which
+        # seeded parameter draw belongs to each role. Source IDs resolve in the
+        # official-dynamics SPEC's "Implementation Source Registry".
+        explorer = make_policy()
+        chaser = make_policy()
+    else:
+        chaser = make_policy()
+        explorer = make_policy()
+    # [OFFICIAL-TRAIN] defines two PPOTorchPolicy instances. RLlib policy
+    # ownership means separate parameters, Adam optimizer moments, and
+    # [RAY-KL-ADAPT] state; no weights or optimizer state are shared here.
+    chaser_optimizer = torch.optim.Adam(chaser.parameters(), lr=config.learning_rate)
+    explorer_optimizer = torch.optim.Adam(explorer.parameters(), lr=config.learning_rate)
+    learner_state = LearnerState(
+        chaser_kl_coeff=config.kl_coeff,
+        explorer_kl_coeff=config.kl_coeff,
     )
+    minibatch_generator = torch.Generator(device="cpu")
+    minibatch_generator.manual_seed(config.seed + 1_000_003)
     if config.finite_guard:
         assert_finite_module(chaser, location="initialization", prefix="chaser")
         assert_finite_module(explorer, location="initialization", prefix="explorer")
@@ -191,11 +95,14 @@ def train(
             config=config,
             chaser=chaser,
             explorer=explorer,
-            optimizer=optimizer,
+            chaser_optimizer=chaser_optimizer,
+            explorer_optimizer=explorer_optimizer,
+            learner_state=learner_state,
+            minibatch_generator=minibatch_generator,
             device=device,
         )
 
-    latest_metrics = _empty_metrics()
+    latest_metrics = empty_metrics()
     latest_update = start_update - 1
     last_checkpoint_at = perf_counter()
     try:
@@ -219,7 +126,10 @@ def train(
                 rollout=rollout,
                 chaser=chaser,
                 explorer=explorer,
-                optimizer=optimizer,
+                chaser_optimizer=chaser_optimizer,
+                explorer_optimizer=explorer_optimizer,
+                learner_state=learner_state,
+                minibatch_generator=minibatch_generator,
                 capture_metrics=should_capture_metrics,
             )
             if captured_metrics is not None:
@@ -237,7 +147,10 @@ def train(
                     explorer,
                     latest_metrics,
                     path=checkpoint_path,
-                    optimizer=optimizer,
+                    chaser_optimizer=chaser_optimizer,
+                    explorer_optimizer=explorer_optimizer,
+                    learner_state=learner_state,
+                    minibatch_generator=minibatch_generator,
                     update=update,
                     device=device,
                 )
@@ -260,7 +173,10 @@ def train(
             chaser,
             explorer,
             latest_metrics,
-            optimizer=optimizer,
+            chaser_optimizer=chaser_optimizer,
+            explorer_optimizer=explorer_optimizer,
+            learner_state=learner_state,
+            minibatch_generator=minibatch_generator,
             update=latest_update,
             device=device,
         )
@@ -306,6 +222,8 @@ def _print_metrics(update: int, metrics: RolloutMetrics) -> None:
         f"loss=({metrics.policy_loss:.3f},"
         f"{metrics.value_loss:.3f}) "
         f"kl={metrics.approx_kl:.4f}",
+        f"kl_coeff=({metrics.chaser_kl_coeff:.4g},"
+        f"{metrics.explorer_kl_coeff:.4g})",
         flush=True,
     )
 
@@ -333,750 +251,17 @@ def _checkpoint_path_for_update(config: TrainConfig, update: int) -> Path:
     )
 
 
-def _configure_device_math(device: torch.device, config: TrainConfig) -> None:
-    if device.type != "cuda":
-        return
-    if config.cuda_tf32:
-        torch.set_float32_matmul_precision("high")
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-
-
-@torch.no_grad()
-def _collect_rollout(
-    *,
-    config: TrainConfig,
-    env: BatchedChaseEnv,
-    chaser: RNNActorCritic,
-    explorer: RNNActorCritic,
-    device: torch.device,
-    capture_metrics: bool,
-) -> Rollout:
-    env.reset_state()
-    chaser_hidden = chaser.initial_hidden(config.batch_size, device)
-    explorer_hidden = explorer.initial_hidden(config.batch_size, device)
-    grid_size = config.env.grid_size
-    grid_cells = grid_size * grid_size
-    max_steps = config.env.max_steps
-    batch_size = config.batch_size
-
-    chaser_position_tensor = torch.empty(max_steps, batch_size, 2, dtype=torch.long, device=device)
-    explorer_position_tensor = torch.empty_like(chaser_position_tensor)
-    partner_visible_tensor = torch.empty(max_steps, batch_size, dtype=torch.bool, device=device)
-    chaser_action_tensor = torch.empty(max_steps, batch_size, dtype=torch.long, device=device)
-    explorer_action_tensor = torch.empty_like(chaser_action_tensor)
-    chaser_log_prob_tensor = torch.empty(max_steps, batch_size, device=device)
-    explorer_log_prob_tensor = torch.empty_like(chaser_log_prob_tensor)
-    chaser_value_tensor = torch.empty(max_steps, batch_size, device=device)
-    explorer_value_tensor = torch.empty_like(chaser_value_tensor)
-    chaser_reward_tensor = torch.empty(max_steps, batch_size, device=device)
-    explorer_reward_tensor = torch.empty_like(chaser_reward_tensor)
-    done_tensor = torch.empty(max_steps, batch_size, dtype=torch.bool, device=device)
-
-    collision_tensor = None
-    chaser_new_field_tensor = None
-    explorer_new_field_tensor = None
-    chaser_partner_visible_tensor = None
-    explorer_partner_visible_tensor = None
-    distance_tensor = None
-    if capture_metrics:
-        collision_tensor = torch.empty(max_steps, batch_size, dtype=torch.bool, device=device)
-        chaser_new_field_tensor = torch.empty_like(collision_tensor)
-        explorer_new_field_tensor = torch.empty_like(collision_tensor)
-        chaser_partner_visible_tensor = torch.empty_like(collision_tensor)
-        explorer_partner_visible_tensor = torch.empty_like(collision_tensor)
-        distance_tensor = torch.empty(max_steps, batch_size, device=device)
-
-    chaser_subspace_norms: list[torch.Tensor] = []
-    explorer_subspace_norms: list[torch.Tensor] = []
-    record_subspace_metrics = capture_metrics and config.subspace_metric_period > 0
-    use_index_path = config.architecture == "rnn"
-    fused_pair = None
-    if config.fused_agent_rollout:
-        fused_class = _FusedAgentPair if config.architecture == "rnn" else _FusedSSMPair
-        fused_pair = fused_class(
-            chaser,
-            explorer,
-            observation_size=config.env.observation_size,
-            batch_size=batch_size,
-            device=device,
-        )
-
-    for step_index in range(max_steps):
-        chaser_flat_index = _flat_position(env.chaser_position, grid_size)
-        explorer_flat_index = _flat_position(env.explorer_position, grid_size)
-        partner_visible = env.partner_visible()
-
-        chaser_position_tensor[step_index].copy_(env.chaser_position)
-        explorer_position_tensor[step_index].copy_(env.explorer_position)
-        partner_visible_tensor[step_index].copy_(partner_visible)
-
-        if fused_pair is not None:
-            chaser_output, explorer_output = fused_pair.step(
-                chaser_flat_index,
-                explorer_flat_index,
-                partner_visible,
-            )
-        elif use_index_path:
-            chaser_output = chaser.forward_one_hot_indices(
-                own_index=chaser_flat_index,
-                other_index=grid_cells + explorer_flat_index,
-                other_visible=partner_visible,
-                hidden=chaser_hidden,
-            )
-            explorer_output = explorer.forward_one_hot_indices(
-                own_index=explorer_flat_index,
-                other_index=grid_cells + chaser_flat_index,
-                other_visible=partner_visible,
-                hidden=explorer_hidden,
-            )
-        else:
-            chaser_output = chaser(
-                _observation_from_flat(
-                    chaser_flat_index, explorer_flat_index, partner_visible, grid_cells
-                ),
-                chaser_hidden,
-            )
-            explorer_output = explorer(
-                _observation_from_flat(
-                    explorer_flat_index, chaser_flat_index, partner_visible, grid_cells
-                ),
-                explorer_hidden,
-            )
-        # No per-step finite check here: even the sync-free accumulated-flag
-        # variant costs ~24% of rollout wall time in kernel launches, and a
-        # non-finite hidden/logit necessarily propagates into the stored
-        # log-probs/values that _assert_rollout_finite validates before the
-        # optimizer can consume them.
-        chaser_action, chaser_log_prob = _sample_categorical(chaser_output.logits)
-        explorer_action, explorer_log_prob = _sample_categorical(explorer_output.logits)
-
-        if config.triton_env_step:
-            result = env.step_training_fused(chaser_action, explorer_action)
-        else:
-            result = env.step_training(chaser_action, explorer_action)
-
-        chaser_action_tensor[step_index].copy_(chaser_action)
-        explorer_action_tensor[step_index].copy_(explorer_action)
-        chaser_log_prob_tensor[step_index].copy_(chaser_log_prob)
-        explorer_log_prob_tensor[step_index].copy_(explorer_log_prob)
-        chaser_value_tensor[step_index].copy_(chaser_output.value)
-        explorer_value_tensor[step_index].copy_(explorer_output.value)
-        chaser_reward_tensor[step_index].copy_(result.chaser_reward)
-        explorer_reward_tensor[step_index].copy_(result.explorer_reward)
-        done_tensor[step_index].copy_(result.done)
-        if capture_metrics:
-            assert collision_tensor is not None
-            assert chaser_new_field_tensor is not None
-            assert explorer_new_field_tensor is not None
-            assert chaser_partner_visible_tensor is not None
-            assert explorer_partner_visible_tensor is not None
-            assert distance_tensor is not None
-            collision_tensor[step_index].copy_(result.collision)
-            chaser_new_field_tensor[step_index].copy_(result.chaser_new_field)
-            explorer_new_field_tensor[step_index].copy_(result.explorer_new_field)
-            chaser_partner_visible_tensor[step_index].copy_(result.chaser_partner_visible)
-            explorer_partner_visible_tensor[step_index].copy_(result.explorer_partner_visible)
-            distance_tensor[step_index].copy_(result.distance)
-        if record_subspace_metrics and step_index % config.subspace_metric_period == 0:
-            chaser_subspace_norms.append(
-                chaser.neural_action_subspace(chaser_output.hidden).norm(dim=1)
-            )
-            explorer_subspace_norms.append(
-                explorer.neural_action_subspace(explorer_output.hidden).norm(dim=1)
-            )
-
-        chaser_hidden = chaser_output.state
-        explorer_hidden = explorer_output.state
-
-    chaser_advantage, chaser_return = _gae(
-        rewards=chaser_reward_tensor,
-        values=chaser_value_tensor,
-        dones=done_tensor,
-        gamma=config.gamma,
-        gae_lambda=config.gae_lambda,
-    )
-    explorer_advantage, explorer_return = _gae(
-        rewards=explorer_reward_tensor,
-        values=explorer_value_tensor,
-        dones=done_tensor,
-        gamma=config.gamma,
-        gae_lambda=config.gae_lambda,
-    )
-
-    chaser_agent = AgentRollout(
-        observations=_build_grid_observations(
-            own_positions=chaser_position_tensor,
-            other_positions=explorer_position_tensor,
-            other_visible=partner_visible_tensor,
-            grid_size=grid_size,
-            device=device,
-        ).detach(),
-        actions=chaser_action_tensor.detach(),
-        old_log_probs=chaser_log_prob_tensor.detach(),
-        old_values=chaser_value_tensor.detach(),
-        rewards=chaser_reward_tensor.detach(),
-        advantages=_normalize(chaser_advantage).detach(),
-        returns=chaser_return.detach(),
-    )
-    explorer_agent = AgentRollout(
-        observations=_build_grid_observations(
-            own_positions=explorer_position_tensor,
-            other_positions=chaser_position_tensor,
-            other_visible=partner_visible_tensor,
-            grid_size=grid_size,
-            device=device,
-        ).detach(),
-        actions=explorer_action_tensor.detach(),
-        old_log_probs=explorer_log_prob_tensor.detach(),
-        old_values=explorer_value_tensor.detach(),
-        rewards=explorer_reward_tensor.detach(),
-        advantages=_normalize(explorer_advantage).detach(),
-        returns=explorer_return.detach(),
-    )
-    metrics = _empty_metrics()
-    if capture_metrics:
-        assert collision_tensor is not None
-        assert chaser_new_field_tensor is not None
-        assert explorer_new_field_tensor is not None
-        assert chaser_partner_visible_tensor is not None
-        assert explorer_partner_visible_tensor is not None
-        assert distance_tensor is not None
-        metrics = RolloutMetrics(
-            collisions_per_episode=collision_tensor.float().sum(dim=0).mean().item(),
-            chaser_return=chaser_reward_tensor.sum(dim=0).mean().item(),
-            explorer_return=explorer_reward_tensor.sum(dim=0).mean().item(),
-            chaser_partner_vision=chaser_partner_visible_tensor.float().mean().item(),
-            explorer_partner_vision=explorer_partner_visible_tensor.float().mean().item(),
-            chaser_new_fields=chaser_new_field_tensor.float().sum(dim=0).mean().item(),
-            explorer_new_fields=explorer_new_field_tensor.float().sum(dim=0).mean().item(),
-            final_distance=distance_tensor[-1].mean().item(),
-            chaser_subspace_norm=_mean_or_zero(chaser_subspace_norms),
-            explorer_subspace_norm=_mean_or_zero(explorer_subspace_norms),
-            policy_loss=0.0,
-            value_loss=0.0,
-            entropy=0.0,
-            approx_kl=0.0,
-            chaser_grad_norm=0.0,
-            explorer_grad_norm=0.0,
-            max_param_abs=module_max_abs(chaser, explorer),
-        )
-    return Rollout(chaser=chaser_agent, explorer=explorer_agent, metrics=metrics)
-
-
-def _flat_position(position: torch.Tensor, grid_size: int) -> torch.Tensor:
-    return position[:, 0] * grid_size + position[:, 1]
-
-
-def _observation_from_flat(
-    own_flat: torch.Tensor,
-    other_flat: torch.Tensor,
-    other_visible: torch.Tensor,
-    grid_cells: int,
-) -> torch.Tensor:
-    """Materialize the 2-channel one-hot observation from flat positions."""
-    batch_size = own_flat.shape[0]
-    observation = torch.zeros(batch_size, 2 * grid_cells, device=own_flat.device)
-    batch_index = torch.arange(batch_size, device=own_flat.device)
-    observation[batch_index, own_flat] = 1.0
-    observation[batch_index, grid_cells + other_flat] = other_visible.to(observation.dtype)
-    return observation
-
-
-class _FusedSSMPair:
-    """Both SSM agents' rollout forwards as one stacked batch.
-
-    Mirrors _FusedAgentPair: the first layer's input projection over one-hot
-    observations becomes a row gather from a stacked table, every dense layer
-    becomes a bmm over the (2, batch, hidden) stack, and the diagonal linear
-    recurrence stays elementwise. Weights are snapshotted once per rollout.
-    """
-
-    def __init__(
-        self,
-        chaser,
-        explorer,
-        *,
-        observation_size: int,
-        batch_size: int,
-        device: torch.device,
-    ) -> None:
-        self.observation_size = observation_size
-        self.hidden_size = chaser.hidden_size
-        self.layers = chaser.layers
-        self.input_table = torch.cat(
-            [chaser.input_projections[0].weight.T, explorer.input_projections[0].weight.T],
-            dim=0,
-        ).contiguous()
-        self.input_bias0 = torch.stack(
-            [chaser.input_projections[0].bias, explorer.input_projections[0].bias]
-        ).unsqueeze(1)
-        self.deep_input_weights = [
-            torch.stack(
-                [
-                    chaser.input_projections[index].weight.T,
-                    explorer.input_projections[index].weight.T,
-                ]
-            ).contiguous()
-            for index in range(1, self.layers)
-        ]
-        self.deep_input_biases = [
-            torch.stack(
-                [chaser.input_projections[index].bias, explorer.input_projections[index].bias]
-            ).unsqueeze(1)
-            for index in range(1, self.layers)
-        ]
-        self.decay_weights = [
-            torch.stack(
-                [
-                    chaser.decay_projections[index].weight.T,
-                    explorer.decay_projections[index].weight.T,
-                ]
-            ).contiguous()
-            for index in range(self.layers)
-        ]
-        self.decay_biases = [
-            torch.stack(
-                [chaser.decay_projections[index].bias, explorer.decay_projections[index].bias]
-            ).unsqueeze(1)
-            for index in range(self.layers)
-        ]
-        self.mix_weights = [
-            torch.stack(
-                [
-                    chaser.mix_projections[index].weight.T,
-                    explorer.mix_projections[index].weight.T,
-                ]
-            ).contiguous()
-            for index in range(self.layers)
-        ]
-        self.mix_biases = [
-            torch.stack(
-                [chaser.mix_projections[index].bias, explorer.mix_projections[index].bias]
-            ).unsqueeze(1)
-            for index in range(self.layers)
-        ]
-        self.action_weight_t = torch.stack(
-            [chaser.action_layer.weight.T, explorer.action_layer.weight.T]
-        ).contiguous()
-        self.action_bias = torch.stack(
-            [chaser.action_layer.bias, explorer.action_layer.bias]
-        ).unsqueeze(1)
-        self.value_weight_t = torch.stack(
-            [chaser.value_layer.weight.T, explorer.value_layer.weight.T]
-        ).contiguous()
-        self.value_bias = torch.stack(
-            [chaser.value_layer.bias, explorer.value_layer.bias]
-        ).unsqueeze(1)
-        self.states = torch.zeros(self.layers, 2, batch_size, self.hidden_size, device=device)
-
-    def step(
-        self,
-        chaser_flat_index: torch.Tensor,
-        explorer_flat_index: torch.Tensor,
-        partner_visible: torch.Tensor,
-    ) -> tuple[PolicyOutput, PolicyOutput]:
-        observation_size = self.observation_size
-        half = observation_size // 2
-        own_index = torch.cat([chaser_flat_index, observation_size + explorer_flat_index])
-        other_index = torch.cat(
-            [half + explorer_flat_index, observation_size + half + chaser_flat_index]
-        )
-        visible = partner_visible.to(self.input_table.dtype).unsqueeze(1)
-        x = (
-            self.input_table[own_index] + self.input_table[other_index] * visible.repeat(2, 1)
-        ).view(2, -1, self.hidden_size) + self.input_bias0
-
-        next_states = []
-        for index in range(self.layers):
-            u = (
-                x
-                if index == 0
-                else torch.baddbmm(
-                    self.deep_input_biases[index - 1], x, self.deep_input_weights[index - 1]
-                )
-            )
-            decay = torch.sigmoid(
-                torch.baddbmm(self.decay_biases[index], u, self.decay_weights[index])
-            )
-            state = decay * self.states[index] + (1.0 - decay) * u
-            next_states.append(state)
-            x = torch.relu(torch.baddbmm(self.mix_biases[index], state, self.mix_weights[index]))
-        self.states = torch.stack(next_states)
-
-        logits = torch.baddbmm(self.action_bias, x, self.action_weight_t)
-        values = torch.baddbmm(self.value_bias, x, self.value_weight_t).squeeze(-1)
-        return (
-            PolicyOutput(logits=logits[0], value=values[0], hidden=x[0], state=None),
-            PolicyOutput(logits=logits[1], value=values[1], hidden=x[1], state=None),
-        )
-
-
-class _FusedAgentPair:
-    """Both agents' rollout forwards as one stacked batch.
-
-    The per-agent math is identical to ``forward_one_hot_indices``; stacking
-    replaces 2x (gather + addmm + linear + linear) with one gather and three
-    bmm calls per step, halving kernel launches in the latency-bound rollout
-    loop. Weights are snapshotted once per rollout (they only change in the
-    PPO update, which never overlaps a rollout).
-    """
-
-    def __init__(
-        self,
-        chaser: RNNActorCritic,
-        explorer: RNNActorCritic,
-        *,
-        observation_size: int,
-        batch_size: int,
-        device: torch.device,
-    ) -> None:
-        self.observation_size = observation_size
-        # (2 * observation_size, hidden): rows [0, obs) are the chaser's
-        # W_ih rows, rows [obs, 2*obs) the explorer's.
-        self.input_table = torch.cat(
-            [chaser.rnn.weight_ih_l0.T, explorer.rnn.weight_ih_l0.T], dim=0
-        ).contiguous()
-        self.bias_ih = torch.stack([chaser.rnn.bias_ih_l0, explorer.rnn.bias_ih_l0]).unsqueeze(1)
-        self.weight_hh_t = torch.stack(
-            [chaser.rnn.weight_hh_l0.T, explorer.rnn.weight_hh_l0.T]
-        ).contiguous()
-        self.bias_hh = torch.stack([chaser.rnn.bias_hh_l0, explorer.rnn.bias_hh_l0]).unsqueeze(1)
-        self.action_weight_t = torch.stack(
-            [chaser.action_layer.weight.T, explorer.action_layer.weight.T]
-        ).contiguous()
-        self.action_bias = torch.stack(
-            [chaser.action_layer.bias, explorer.action_layer.bias]
-        ).unsqueeze(1)
-        self.value_weight_t = torch.stack(
-            [chaser.value_layer.weight.T, explorer.value_layer.weight.T]
-        ).contiguous()
-        self.value_bias = torch.stack(
-            [chaser.value_layer.bias, explorer.value_layer.bias]
-        ).unsqueeze(1)
-        self.hidden_size = chaser.hidden_size
-        self.hidden = torch.zeros(2, batch_size, self.hidden_size, device=device)
-
-    def step(
-        self,
-        chaser_flat_index: torch.Tensor,
-        explorer_flat_index: torch.Tensor,
-        partner_visible: torch.Tensor,
-    ) -> tuple[PolicyOutput, PolicyOutput]:
-        observation_size = self.observation_size
-        half = observation_size // 2
-        own_index = torch.cat(
-            [chaser_flat_index, observation_size + explorer_flat_index]
-        )
-        other_index = torch.cat(
-            [
-                half + explorer_flat_index,
-                observation_size + half + chaser_flat_index,
-            ]
-        )
-        visible = partner_visible.to(self.input_table.dtype).unsqueeze(1)
-        input_projection = (
-            self.input_table[own_index]
-            + self.input_table[other_index] * visible.repeat(2, 1)
-        ).view(2, -1, self.hidden_size)
-        next_hidden = torch.relu(
-            input_projection
-            + self.bias_ih
-            + torch.bmm(self.hidden, self.weight_hh_t)
-            + self.bias_hh
-        )
-        logits = torch.baddbmm(self.action_bias, next_hidden, self.action_weight_t)
-        values = torch.baddbmm(self.value_bias, next_hidden, self.value_weight_t).squeeze(-1)
-        self.hidden = next_hidden
-        return (
-            PolicyOutput(logits=logits[0], value=values[0], hidden=next_hidden[0]),
-            PolicyOutput(logits=logits[1], value=values[1], hidden=next_hidden[1]),
-        )
-
-
-def _build_grid_observations(
-    *,
-    own_positions: torch.Tensor,
-    other_positions: torch.Tensor,
-    other_visible: torch.Tensor,
-    grid_size: int,
-    device: torch.device,
-) -> torch.Tensor:
-    steps, batch_size = own_positions.shape[:2]
-    observations = torch.zeros(
-        steps,
-        batch_size,
-        2,
-        grid_size,
-        grid_size,
-        device=device,
-    )
-    step_index = torch.arange(steps, device=device)[:, None].expand(steps, batch_size)
-    batch_index = torch.arange(batch_size, device=device)[None, :].expand(steps, batch_size)
-    observations[
-        step_index,
-        batch_index,
-        0,
-        own_positions[..., 0],
-        own_positions[..., 1],
-    ] = 1.0
-    visible_step = step_index[other_visible]
-    visible_batch = batch_index[other_visible]
-    visible_other_positions = other_positions[other_visible]
-    observations[
-        visible_step,
-        visible_batch,
-        1,
-        visible_other_positions[:, 0],
-        visible_other_positions[:, 1],
-    ] = 1.0
-    return observations.flatten(start_dim=2)
-
-
-def _mean_or_zero(values: list[torch.Tensor]) -> float:
-    if not values:
-        return 0.0
-    return torch.stack(values).mean().item()
-
-
-def _ppo_update(
-    *,
-    config: TrainConfig,
-    rollout: Rollout,
-    chaser: RNNActorCritic,
-    explorer: RNNActorCritic,
-    optimizer: torch.optim.Optimizer,
-    capture_metrics: bool,
-) -> RolloutMetrics | None:
-    policy_losses: list[float] = []
-    value_losses: list[float] = []
-    entropies: list[float] = []
-    approx_kls: list[float] = []
-    chaser_grad_norms: list[float] = []
-    explorer_grad_norms: list[float] = []
-    # Gradients are clipped per agent: a joint norm would let one agent's
-    # gradient spike scale down the other's update, coupling two policies
-    # that are meant to be independent.
-    chaser_parameters = list(chaser.parameters())
-    explorer_parameters = list(explorer.parameters())
-
-    for ppo_epoch in range(config.ppo_epochs):
-        chaser_log_prob, chaser_value, chaser_entropy = _evaluate_actions(
-            chaser,
-            rollout.chaser.observations,
-            rollout.chaser.actions,
-        )
-        explorer_log_prob, explorer_value, explorer_entropy = _evaluate_actions(
-            explorer,
-            rollout.explorer.observations,
-            rollout.explorer.actions,
-        )
-
-        chaser_policy_loss = _clipped_policy_loss(
-            log_prob=chaser_log_prob,
-            old_log_prob=rollout.chaser.old_log_probs,
-            advantage=rollout.chaser.advantages,
-            clip_epsilon=config.clip_epsilon,
-        )
-        explorer_policy_loss = _clipped_policy_loss(
-            log_prob=explorer_log_prob,
-            old_log_prob=rollout.explorer.old_log_probs,
-            advantage=rollout.explorer.advantages,
-            clip_epsilon=config.clip_epsilon,
-        )
-        chaser_value_error = (chaser_value - rollout.chaser.returns).square()
-        explorer_value_error = (explorer_value - rollout.explorer.returns).square()
-        if config.value_clip > 0:
-            # RLlib-style vf_clip_param: bounds the per-sample value loss so
-            # the value function cannot chase its own bootstrapped targets
-            # into divergence.
-            chaser_value_error = chaser_value_error.clamp(max=config.value_clip)
-            explorer_value_error = explorer_value_error.clamp(max=config.value_clip)
-        value_loss = 0.5 * (chaser_value_error.mean() + explorer_value_error.mean())
-        entropy = chaser_entropy.mean() + explorer_entropy.mean()
-        policy_loss = chaser_policy_loss + explorer_policy_loss
-        recurrent_l2 = config.recurrent_l2_coef * (
-            chaser.recurrent_weight_norm()
-            + explorer.recurrent_weight_norm()
-        )
-        loss = (
-            policy_loss
-            + config.value_coef * value_loss
-            - config.entropy_coef * entropy
-            + recurrent_l2
-        )
-        if config.finite_guard:
-            assert_finite_tensors(
-                {
-                    "chaser_log_prob": chaser_log_prob,
-                    "explorer_log_prob": explorer_log_prob,
-                    "chaser_value": chaser_value,
-                    "explorer_value": explorer_value,
-                    "chaser_entropy": chaser_entropy,
-                    "explorer_entropy": explorer_entropy,
-                    "policy_loss": policy_loss,
-                    "value_loss": value_loss,
-                    "entropy": entropy,
-                    "recurrent_l2": recurrent_l2,
-                    "loss": loss,
-                },
-                location=f"ppo_epoch_{ppo_epoch}",
-            )
-
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        chaser_grad_norm = nn.utils.clip_grad_norm_(
-            chaser_parameters,
-            config.grad_clip,
-            error_if_nonfinite=config.finite_guard,
-        )
-        explorer_grad_norm = nn.utils.clip_grad_norm_(
-            explorer_parameters,
-            config.grad_clip,
-            error_if_nonfinite=config.finite_guard,
-        )
-        if config.finite_guard:
-            assert_finite_tensor(
-                chaser_grad_norm,
-                location=f"ppo_epoch_{ppo_epoch}",
-                name="chaser_grad_norm",
-            )
-            assert_finite_tensor(
-                explorer_grad_norm,
-                location=f"ppo_epoch_{ppo_epoch}",
-                name="explorer_grad_norm",
-            )
-        optimizer.step()
-
-        if capture_metrics:
-            policy_losses.append(policy_loss.item())
-            value_losses.append(value_loss.item())
-            entropies.append(entropy.item())
-            chaser_grad_norms.append(float(chaser_grad_norm.item()))
-            explorer_grad_norms.append(float(explorer_grad_norm.item()))
-            with torch.no_grad():
-                chaser_kl = rollout.chaser.old_log_probs - chaser_log_prob
-                explorer_kl = rollout.explorer.old_log_probs - explorer_log_prob
-                approx_kls.append(0.5 * (chaser_kl.mean().item() + explorer_kl.mean().item()))
-
-    if config.finite_guard:
-        # Parameters are validated once per update rather than per epoch: the
-        # post-update loss/grad-norm guards above already fail fast, and the
-        # full state-dict sweep costs one CPU/GPU sync per tensor.
-        assert_finite_module(chaser, location="ppo_update", prefix="chaser")
-        assert_finite_module(explorer, location="ppo_update", prefix="explorer")
-
-    if not capture_metrics:
-        return None
-    return RolloutMetrics(
-        collisions_per_episode=rollout.metrics.collisions_per_episode,
-        chaser_return=rollout.metrics.chaser_return,
-        explorer_return=rollout.metrics.explorer_return,
-        chaser_partner_vision=rollout.metrics.chaser_partner_vision,
-        explorer_partner_vision=rollout.metrics.explorer_partner_vision,
-        chaser_new_fields=rollout.metrics.chaser_new_fields,
-        explorer_new_fields=rollout.metrics.explorer_new_fields,
-        final_distance=rollout.metrics.final_distance,
-        chaser_subspace_norm=rollout.metrics.chaser_subspace_norm,
-        explorer_subspace_norm=rollout.metrics.explorer_subspace_norm,
-        policy_loss=sum(policy_losses) / len(policy_losses),
-        value_loss=sum(value_losses) / len(value_losses),
-        entropy=sum(entropies) / len(entropies),
-        approx_kl=sum(approx_kls) / len(approx_kls),
-        chaser_grad_norm=sum(chaser_grad_norms) / len(chaser_grad_norms),
-        explorer_grad_norm=sum(explorer_grad_norms) / len(explorer_grad_norms),
-        max_param_abs=module_max_abs(chaser, explorer),
-    )
-
-
-def _evaluate_actions(
-    policy: RNNActorCritic,
-    observations: torch.Tensor,
-    actions: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    logits, values, _ = policy.sequence(observations)
-    log_probs = logits.log_softmax(dim=-1)
-    action_log_probs = log_probs.gather(dim=-1, index=actions.unsqueeze(-1)).squeeze(-1)
-    entropy = -(log_probs.exp() * log_probs).sum(dim=-1)
-    return action_log_probs, values, entropy
-
-
-def _sample_categorical(logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    gumbel = -torch.empty_like(logits).exponential_().log()
-    action = (logits + gumbel).argmax(dim=-1)
-    log_prob = logits.log_softmax(dim=-1).gather(
-        dim=-1,
-        index=action.unsqueeze(-1),
-    ).squeeze(-1)
-    return action, log_prob
-
-
-def _clipped_policy_loss(
-    *,
-    log_prob: torch.Tensor,
-    old_log_prob: torch.Tensor,
-    advantage: torch.Tensor,
-    clip_epsilon: float,
-) -> torch.Tensor:
-    ratio = (log_prob - old_log_prob).exp()
-    clipped_ratio = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
-    return -torch.minimum(ratio * advantage, clipped_ratio * advantage).mean()
-
-
-def _gae(
-    *,
-    rewards: torch.Tensor,
-    values: torch.Tensor,
-    dones: torch.Tensor,
-    gamma: float,
-    gae_lambda: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    advantages = torch.zeros_like(rewards)
-    last_advantage = torch.zeros_like(rewards[0])
-    next_value = torch.zeros_like(rewards[0])
-    for step in range(rewards.shape[0] - 1, -1, -1):
-        nonterminal = (~dones[step]).float()
-        delta = rewards[step] + gamma * next_value * nonterminal - values[step]
-        last_advantage = delta + gamma * gae_lambda * nonterminal * last_advantage
-        advantages[step] = last_advantage
-        next_value = values[step]
-    return advantages, advantages + values
-
-
-def _normalize(values: torch.Tensor) -> torch.Tensor:
-    return (values - values.mean()) / (values.std(unbiased=False) + 1e-8)
-
-
-def _empty_metrics() -> RolloutMetrics:
-    return RolloutMetrics(
-        collisions_per_episode=0.0,
-        chaser_return=0.0,
-        explorer_return=0.0,
-        chaser_partner_vision=0.0,
-        explorer_partner_vision=0.0,
-        chaser_new_fields=0.0,
-        explorer_new_fields=0.0,
-        final_distance=0.0,
-        chaser_subspace_norm=0.0,
-        explorer_subspace_norm=0.0,
-        policy_loss=0.0,
-        value_loss=0.0,
-        entropy=0.0,
-        approx_kl=0.0,
-        chaser_grad_norm=0.0,
-        explorer_grad_norm=0.0,
-        max_param_abs=0.0,
-    )
-
-
 def _save_checkpoint(
     config: TrainConfig,
-    chaser: RNNActorCritic,
-    explorer: RNNActorCritic,
+    chaser: PolicyBase,
+    explorer: PolicyBase,
     metrics: RolloutMetrics,
     *,
     path: Path | None = None,
-    optimizer: torch.optim.Optimizer | None = None,
+    chaser_optimizer: torch.optim.Optimizer | None = None,
+    explorer_optimizer: torch.optim.Optimizer | None = None,
+    learner_state: LearnerState | None = None,
+    minibatch_generator: torch.Generator | None = None,
     update: int | None = None,
     device: torch.device | None = None,
 ) -> Path | None:
@@ -1084,11 +269,22 @@ def _save_checkpoint(
     if not checkpoint:
         return None
     training_state = None
-    if optimizer is not None and update is not None:
+    if (
+        chaser_optimizer is not None
+        and explorer_optimizer is not None
+        and learner_state is not None
+        and minibatch_generator is not None
+        and update is not None
+    ):
         training_state = TrainingState(
             update=update,
-            optimizer_state=optimizer.state_dict(),
+            optimizer_states={
+                "chaser": chaser_optimizer.state_dict(),
+                "explorer": explorer_optimizer.state_dict(),
+            },
+            learner_state=asdict(learner_state),
             cpu_rng_state=torch.get_rng_state(),
+            minibatch_rng_state=minibatch_generator.get_state(),
             cuda_rng_state=(
                 torch.cuda.get_rng_state(device)
                 if device is not None and device.type == "cuda"
@@ -1098,7 +294,7 @@ def _save_checkpoint(
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
     save_checkpoint(
         checkpoint,
-        config=_checkpoint_config(config),
+        config=checkpoint_config(config),
         metrics=asdict(metrics),
         chaser_state=chaser.state_dict(),
         explorer_state=explorer.state_dict(),
@@ -1113,9 +309,12 @@ def _save_checkpoint(
 def _restore_training_state(
     *,
     config: TrainConfig,
-    chaser: RNNActorCritic,
-    explorer: RNNActorCritic,
-    optimizer: torch.optim.Optimizer,
+    chaser: PolicyBase,
+    explorer: PolicyBase,
+    chaser_optimizer: torch.optim.Optimizer,
+    explorer_optimizer: torch.optim.Optimizer,
+    learner_state: LearnerState,
+    minibatch_generator: torch.Generator,
     device: torch.device,
 ) -> int:
     """Load model/optimizer/RNG state from a checkpoint; return its update index."""
@@ -1123,8 +322,31 @@ def _restore_training_state(
     if not path.exists():
         raise FileNotFoundError(f"resume checkpoint not found: {path}")
     saved_config, _, chaser_state, explorer_state = load_checkpoint(path)
-    current_config = _checkpoint_config(config)
-    for key in ("env", "batch_size", "architecture", "hidden_size", "seed"):
+    current_config = checkpoint_config(config)
+    resume_keys = (
+        "env",
+        "batch_size",
+        "architecture",
+        "hidden_size",
+        "seed",
+        "gamma",
+        "gae_lambda",
+        "learning_rate",
+        "ppo_epochs",
+        "clip_epsilon",
+        "entropy_coef",
+        "value_coef",
+        "value_clip",
+        "recurrent_l2_coef",
+        "grad_clip",
+        "sgd_minibatch_size",
+        "max_seq_len",
+        "kl_coeff",
+        "kl_target",
+        "learner_mode",
+        "rnn_initialization",
+    )
+    for key in resume_keys:
         if saved_config.get(key) != current_config.get(key):
             raise ValueError(
                 f"resume checkpoint {path} was trained with {key}="
@@ -1141,8 +363,12 @@ def _restore_training_state(
         )
     chaser.load_state_dict(chaser_state)
     explorer.load_state_dict(explorer_state)
-    optimizer.load_state_dict(training_state.optimizer_state)
+    chaser_optimizer.load_state_dict(training_state.optimizer_states["chaser"])
+    explorer_optimizer.load_state_dict(training_state.optimizer_states["explorer"])
+    learner_state.chaser_kl_coeff = training_state.learner_state["chaser_kl_coeff"]
+    learner_state.explorer_kl_coeff = training_state.learner_state["explorer_kl_coeff"]
     torch.set_rng_state(training_state.cpu_rng_state)
+    minibatch_generator.set_state(training_state.minibatch_rng_state)
     if device.type == "cuda" and training_state.cuda_rng_state is not None:
         torch.cuda.set_rng_state(training_state.cuda_rng_state, device)
     print(f"resumed_from={path} update={training_state.update}", flush=True)
@@ -1153,11 +379,13 @@ def _assert_rollout_finite(rollout: Rollout) -> None:
     assert_finite_tensors(
         {
             "chaser_old_log_probs": rollout.chaser.old_log_probs,
+            "chaser_old_logits": rollout.chaser.old_logits,
             "chaser_old_values": rollout.chaser.old_values,
             "chaser_rewards": rollout.chaser.rewards,
             "chaser_advantages": rollout.chaser.advantages,
             "chaser_returns": rollout.chaser.returns,
             "explorer_old_log_probs": rollout.explorer.old_log_probs,
+            "explorer_old_logits": rollout.explorer.old_logits,
             "explorer_old_values": rollout.explorer.old_values,
             "explorer_rewards": rollout.explorer.rewards,
             "explorer_advantages": rollout.explorer.advantages,
@@ -1165,17 +393,12 @@ def _assert_rollout_finite(rollout: Rollout) -> None:
         },
         location="rollout",
     )
-
-
-def _checkpoint_config(config: TrainConfig) -> dict[str, object]:
-    return _json_ready(asdict(config))
-
-
-def _json_ready(value: object) -> object:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, tuple | list):
-        return [_json_ready(item) for item in value]
-    return value
+    if rollout.chaser.state_inputs is not None:
+        assert rollout.explorer.state_inputs is not None
+        assert_finite_tensors(
+            {
+                "chaser_state_inputs": rollout.chaser.state_inputs,
+                "explorer_state_inputs": rollout.explorer.state_inputs,
+            },
+            location="rollout_state_inputs",
+        )

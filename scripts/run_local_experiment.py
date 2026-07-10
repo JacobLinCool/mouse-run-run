@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from safetensors import SafetensorError
+
 from mouse_run_run.env import GridWorldConfig
 from mouse_run_run.health import checkpoint_health
 from mouse_run_run.provenance import (
@@ -23,6 +25,7 @@ from mouse_run_run.provenance import (
 )
 from mouse_run_run.serialization import read_metadata
 from mouse_run_run.train import TrainConfig, train
+from mouse_run_run.training_config import apply_preset_defaults, resolve_partner_visibility
 
 
 DEFAULT_UPDATES = 20_000
@@ -44,14 +47,17 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, default=6)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
-    parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument("--spawn-mode", choices=("full_grid", "official_exclude_last"), default="full_grid")
+    parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--gae-lambda", type=float)
+    parser.add_argument("--ppo-epochs", type=int)
     parser.add_argument(
         "--architecture",
         choices=("rnn", "mlp", "ssm", "transformer"),
         default="rnn",
     )
     parser.add_argument("--hidden-size", type=int, default=256)
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--learning-rate", type=float)
     parser.add_argument(
         "--preset",
         choices=("modern_fast", "paper_text", "official_code"),
@@ -63,11 +69,17 @@ def main() -> None:
     parser.add_argument(
         "--value-clip",
         type=float,
-        default=10.0,
+        default=None,
         help="RLlib-style vf_clip_param: per-sample squared value error bound (0 disables).",
     )
     parser.add_argument("--recurrent-l2-coef", type=float)
     parser.add_argument("--grad-clip", type=float)
+    parser.add_argument("--sgd-minibatch-size", type=int)
+    parser.add_argument("--max-seq-len", type=int)
+    parser.add_argument("--kl-coeff", type=float)
+    parser.add_argument("--kl-target", type=float)
+    parser.add_argument("--learner-mode", choices=("full_batch", "rllib_2_2"))
+    parser.add_argument("--rnn-initialization", choices=("modern", "pytorch_default"))
     parser.add_argument("--log-every", type=int, default=500)
     parser.add_argument("--checkpoint-every", type=int, default=1000)
     parser.add_argument("--checkpoint-every-seconds", type=float, default=1800.0)
@@ -113,7 +125,7 @@ def main() -> None:
         _worker()
         return
 
-    _apply_preset(args)
+    apply_preset_defaults(args)
     _validate_args(args)
     _require_fresh_or_resume(args)
     runner = ExperimentRunner(args)
@@ -128,7 +140,8 @@ def _worker() -> None:
         vision_radius=3,
         max_steps=payload["max_steps"],
         task=task,
-        partner_visibility="none" if task == "non_social" else "partial",
+        partner_visibility=resolve_partner_visibility(task, None),
+        spawn_mode=payload["spawn_mode"],
     )
     started = time.perf_counter()
     metrics = train(
@@ -137,6 +150,8 @@ def _worker() -> None:
             batch_size=payload["batch_size"],
             architecture=payload.get("architecture", "rnn"),
             hidden_size=payload["hidden_size"],
+            gamma=payload["gamma"],
+            gae_lambda=payload["gae_lambda"],
             learning_rate=payload["learning_rate"],
             ppo_epochs=payload["ppo_epochs"],
             clip_epsilon=payload["clip_epsilon"],
@@ -145,6 +160,12 @@ def _worker() -> None:
             value_clip=payload["value_clip"],
             recurrent_l2_coef=payload["recurrent_l2_coef"],
             grad_clip=payload["grad_clip"],
+            sgd_minibatch_size=payload["sgd_minibatch_size"],
+            max_seq_len=payload["max_seq_len"],
+            kl_coeff=payload["kl_coeff"],
+            kl_target=payload["kl_target"],
+            learner_mode=payload["learner_mode"],
+            rnn_initialization=payload["rnn_initialization"],
             seed=payload["seed"],
             device=payload["device"],
             log_every=payload["log_every"],
@@ -386,6 +407,9 @@ class ExperimentRunner:
             "updates": self.args.updates,
             "batch_size": self.args.batch_size,
             "max_steps": self.args.max_steps,
+            "spawn_mode": self.args.spawn_mode,
+            "gamma": self.args.gamma,
+            "gae_lambda": self.args.gae_lambda,
             "ppo_epochs": self.args.ppo_epochs,
             "architecture": self.args.architecture,
             "hidden_size": self.args.hidden_size,
@@ -397,6 +421,12 @@ class ExperimentRunner:
             "value_clip": self.args.value_clip,
             "recurrent_l2_coef": self.args.recurrent_l2_coef,
             "grad_clip": self.args.grad_clip,
+            "sgd_minibatch_size": self.args.sgd_minibatch_size,
+            "max_seq_len": self.args.max_seq_len,
+            "kl_coeff": self.args.kl_coeff,
+            "kl_target": self.args.kl_target,
+            "learner_mode": self.args.learner_mode,
+            "rnn_initialization": self.args.rnn_initialization,
             "device": self.args.device,
             "log_every": self.args.log_every,
             "checkpoint_every": self.args.checkpoint_every,
@@ -648,7 +678,6 @@ class ExperimentRunner:
         write_json_atomic(self.root / "run_status.json", status)
 
     def _job_status(self, job: dict[str, Any]) -> dict[str, Any]:
-        status_path = Path(job["run_dir"]) / "status.json"
         payload: dict[str, Any] = {
             "task": job["task"],
             "seed": job["seed"],
@@ -705,6 +734,9 @@ class ExperimentRunner:
             "updates": self.args.updates,
             "batch_size": self.args.batch_size,
             "max_steps": self.args.max_steps,
+            "spawn_mode": self.args.spawn_mode,
+            "gamma": self.args.gamma,
+            "gae_lambda": self.args.gae_lambda,
             "ppo_epochs": self.args.ppo_epochs,
             "architecture": self.args.architecture,
             "hidden_size": self.args.hidden_size,
@@ -716,6 +748,12 @@ class ExperimentRunner:
             "value_clip": self.args.value_clip,
             "recurrent_l2_coef": self.args.recurrent_l2_coef,
             "grad_clip": self.args.grad_clip,
+            "sgd_minibatch_size": self.args.sgd_minibatch_size,
+            "max_seq_len": self.args.max_seq_len,
+            "kl_coeff": self.args.kl_coeff,
+            "kl_target": self.args.kl_target,
+            "learner_mode": self.args.learner_mode,
+            "rnn_initialization": self.args.rnn_initialization,
             "checkpoint_every": self.args.checkpoint_every,
             "checkpoint_every_seconds": self.args.checkpoint_every_seconds,
             "status_every_seconds": self.args.status_every_seconds,
@@ -761,8 +799,21 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("value-coef must be non-negative")
     if args.recurrent_l2_coef < 0:
         raise ValueError("recurrent-l2-coef must be non-negative")
-    if args.grad_clip <= 0:
+    if args.grad_clip is not None and args.grad_clip <= 0:
         raise ValueError("grad-clip must be positive")
+    if args.sgd_minibatch_size < 0:
+        raise ValueError("sgd-minibatch-size must be non-negative")
+    if args.max_seq_len < 1:
+        raise ValueError("max-seq-len must be at least 1")
+    if args.kl_coeff < 0 or args.kl_target <= 0:
+        raise ValueError("KL coefficient must be non-negative and target positive")
+    if args.learner_mode == "rllib_2_2":
+        if args.architecture != "rnn":
+            raise ValueError("rllib_2_2 learner mode requires architecture='rnn'")
+        if args.sgd_minibatch_size <= args.max_seq_len:
+            raise ValueError("sgd-minibatch-size must be larger than max-seq-len")
+        if args.batch_size * args.max_steps < args.sgd_minibatch_size:
+            raise ValueError("train batch must contain at least one SGD minibatch")
     if args.max_attempts < 1:
         raise ValueError("max-attempts must be at least 1")
     if args.max_total_attempts < args.max_attempts:
@@ -814,35 +865,6 @@ def _normalize_config_paths(args: argparse.Namespace) -> None:
             setattr(args, key, Path(value))
 
 
-def _apply_preset(args: argparse.Namespace) -> None:
-    defaults = {
-        "modern_fast": {
-            "clip_epsilon": 0.2,
-            "entropy_coef": 0.01,
-            "value_coef": 0.5,
-            "recurrent_l2_coef": 0.0,
-            "grad_clip": 1.0,
-        },
-        "paper_text": {
-            "clip_epsilon": 0.2,
-            "entropy_coef": 0.01,
-            "value_coef": 0.5,
-            "recurrent_l2_coef": 0.3,
-            "grad_clip": 1.0,
-        },
-        "official_code": {
-            "clip_epsilon": 0.3,
-            "entropy_coef": 0.01,
-            "value_coef": 0.5,
-            "recurrent_l2_coef": 3.0,
-            "grad_clip": 1.0,
-        },
-    }[args.preset]
-    for key, value in defaults.items():
-        if getattr(args, key) is None:
-            setattr(args, key, value)
-
-
 def _task_names(raw: str) -> tuple[str, ...]:
     if raw == "both":
         return ("social", "non_social")
@@ -868,7 +890,7 @@ def _training_state_update(path: Path) -> int | None:
         if raw_state is None:
             return None
         return int(json.loads(raw_state)["update"])
-    except Exception:
+    except (OSError, ValueError, KeyError, json.JSONDecodeError, SafetensorError):
         return None
 
 

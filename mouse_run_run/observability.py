@@ -29,6 +29,8 @@ OPTIM_TAGS = {
     "value_loss": "optim/value_loss",
     "entropy": "optim/entropy",
     "approx_kl": "optim/approx_kl",
+    "chaser_kl_coeff": "optim/chaser_kl_coeff",
+    "explorer_kl_coeff": "optim/explorer_kl_coeff",
 }
 
 RNN_TAGS = {

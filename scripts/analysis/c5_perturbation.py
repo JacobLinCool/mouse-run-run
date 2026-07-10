@@ -19,7 +19,6 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-import numpy as np
 import torch
 
 from mouse_run_run.analysis import (

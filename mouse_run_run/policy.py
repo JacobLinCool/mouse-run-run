@@ -83,13 +83,23 @@ class RNNActorCritic(PolicyBase):
         input_size: int,
         hidden_size: int = 256,
         action_size: int = 4,
+        initialization: str = "modern",
     ) -> None:
         super().__init__()
         self.hidden_size = hidden_size
         self.rnn = nn.RNN(input_size, hidden_size, nonlinearity="relu")
         self.action_layer = nn.Linear(hidden_size, action_size)
         self.value_layer = nn.Linear(hidden_size, 1)
-        self.reset_parameters()
+        # [OFFICIAL-MODEL] constructs these three PyTorch modules without an
+        # explicit reset, so pytorch_default deliberately keeps their native
+        # initialization. Source ID: official-dynamics SPEC source registry.
+        if initialization == "modern":
+            self.reset_parameters()
+        elif initialization != "pytorch_default":
+            raise ValueError(
+                f"Unknown RNN initialization {initialization!r}; expected "
+                "'modern' or 'pytorch_default'"
+            )
 
     def reset_parameters(self) -> None:
         nn.init.kaiming_uniform_(self.rnn.weight_ih_l0, nonlinearity="relu")
@@ -515,6 +525,8 @@ def build_policy(
     architecture: str,
     input_size: int,
     hidden_size: int = 256,
+    *,
+    rnn_initialization: str = "modern",
 ) -> PolicyBase:
     try:
         policy_class = ARCHITECTURES[architecture]
@@ -522,4 +534,12 @@ def build_policy(
         raise ValueError(
             f"Unknown architecture {architecture!r}; expected one of {sorted(ARCHITECTURES)}"
         ) from None
+    if architecture == "rnn":
+        return policy_class(
+            input_size,
+            hidden_size=hidden_size,
+            initialization=rnn_initialization,
+        )
+    if rnn_initialization != "modern":
+        raise ValueError("rnn_initialization only applies to architecture='rnn'")
     return policy_class(input_size, hidden_size=hidden_size)

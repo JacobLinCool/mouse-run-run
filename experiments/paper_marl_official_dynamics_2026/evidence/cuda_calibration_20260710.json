@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-10",
+  "purpose": "Compact retained evidence for the official-dynamics CUDA calibration; bulky checkpoints, TensorBoard files, worker artifacts, and telemetry traces were deleted after verification.",
+  "runtime_snapshot": {
+    "synthetic_clean_git_sha": "aaa0be123b38966a08353852f688750377aec154",
+    "git_dirty": false,
+    "python": "3.14.2",
+    "torch": "2.12.1+cu130",
+    "triton": "3.7.1",
+    "cuda": "13.0",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "gpu_memory_bytes": 101973950464,
+    "note": "The synthetic commit was created from the local source snapshot in an isolated remote directory so every CUDA result was bound to a clean, immutable tree without changing the user's working tree."
+  },
+  "verification": {
+    "ruff": "passed",
+    "pytest": {
+      "status": "passed",
+      "tests": 26
+    },
+    "triton_environment_equivalence": {
+      "status": "passed",
+      "seeds_per_case": 20,
+      "steps_per_seed": 100,
+      "batch_size": 40,
+      "cases": [
+        {
+          "task": "social",
+          "partner_visibility": "partial"
+        },
+        {
+          "task": "non_social",
+          "partner_visibility": "none"
+        },
+        {
+          "task": "social",
+          "partner_visibility": "full"
+        }
+      ]
+    },
+    "launch_gate": {
+      "status": "passed",
+      "config_sha256": "18e9e00924775d84bb4365bf5a937f1df5776d89da667d0753d5fc7845c963b8",
+      "spec_sha256": "9b1d30e2e6ec8eca65f790a8b65f277a08a690117953fb7c526f5bb72077b827",
+      "triton_record_git_sha_matches": true
+    }
+  },
+  "five_update_calibration": {
+    "config": "experiments/paper_marl_official_dynamics_2026/configs/calibration_cuda.json",
+    "task": "social",
+    "seed": 0,
+    "environment_steps_per_update": 4000,
+    "updates": 5,
+    "all_updates_healthy": true,
+    "update_seconds": [
+      30.19329092791304,
+      26.22368644597009,
+      26.21775426901877,
+      26.20236347289756,
+      26.205842515919358
+    ],
+    "warm_update_excluded_steady_mean_seconds": 26.212411675951444,
+    "warm_update_excluded_steady_population_sd_seconds": 0.00865713560878552,
+    "final_environment_steps_per_second": 148.10104364393217,
+    "telemetry_samples": 763,
+    "peak_device_memory_mib": 799.0,
+    "mean_gpu_utilization_percent": 5.190039318479686,
+    "peak_gpu_utilization_percent": 13.0
+  },
+  "finite_guard_optimization_check": {
+    "change": "Accumulate minibatch loss and gradient finite status on device and synchronize once per policy update.",
+    "reference_steady_mean_seconds": 27.92813221726101,
+    "optimized_steady_mean_seconds": 26.212411675951444,
+    "speedup_percent": 6.5454509204265765,
+    "checkpoint_tensor_count": 67,
+    "checkpoint_key_sets_equal": true,
+    "all_checkpoint_tensors_bit_equal": true,
+    "maximum_absolute_tensor_difference": 0.0,
+    "final_metrics_equal": true
+  },
+  "multiplex_calibration": {
+    "method": "Three updates per worker; exclude warm update one; throughput uses the slowest completed worker.",
+    "workload": {
+      "task": "social",
+      "preset": "official_code",
+      "environment_steps_per_update": 4000,
+      "full_jobs": 20,
+      "full_updates_per_job": 20000,
+      "projected_full_environment_steps": 1600000000
+    },
+    "initial_concurrency_sweep": [
+      {
+        "concurrency": 1,
+        "steady_environment_steps_per_second": 142.43521502905267,
+        "projected_full_panel_hours": 3120.326980612137,
+        "failures": 0
+      },
+      {
+        "concurrency": 2,
+        "steady_environment_steps_per_second": 273.7226262531833,
+        "projected_full_panel_hours": 1623.7037125069442,
+        "failures": 0
+      },
+      {
+        "concurrency": 4,
+        "steady_environment_steps_per_second": 477.8797235961566,
+        "projected_full_panel_hours": 930.0341121399672,
+        "failures": 0
+      },
+      {
+        "concurrency": 8,
+        "steady_environment_steps_per_second": 777.4823936785476,
+        "projected_full_panel_hours": 571.6456707676924,
+        "failures": 0
+      },
+      {
+        "concurrency": 10,
+        "steady_environment_steps_per_second": 889.3974079412416,
+        "projected_full_panel_hours": 499.714121579503,
+        "failures": 0
+      }
+    ],
+    "final_code_concurrency_10": {
+      "workers": 10,
+      "failures": 0,
+      "elapsed_seconds": 119.55627386877313,
+      "steady_environment_steps": 80000,
+      "steady_environment_steps_per_second": 1094.9738953132676,
+      "per_worker_steady_update_seconds_mean": 35.17200397860724,
+      "per_worker_steady_update_seconds_min": 29.759185711620376,
+      "per_worker_steady_update_seconds_max": 36.530551249859855,
+      "peak_worker_cuda_memory_mib": 103.49072265625,
+      "projected_full_panel_hours": 405.89501388733174,
+      "projected_full_panel_days": 16.91229224530549
+    }
+  },
+  "retention": {
+    "retained": [
+      "This compact calibration record",
+      "The experiment specification and immutable JSON configs",
+      "Commands and interpretation in RUNS.md"
+    ],
+    "deleted_after_verification": [
+      "Remote isolated source snapshot and virtual environment",
+      "CUDA checkpoints and optimizer states",
+      "TensorBoard events",
+      "Per-worker multiplex run directories",
+      "Raw GPU telemetry CSV files",
+      "Local smoke run directories and temporary checkpoints"
+    ]
+  }
+}

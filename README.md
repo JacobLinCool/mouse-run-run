@@ -1,36 +1,79 @@
 # mouse-run-run
 
-Modern PyTorch reproduction scaffold for the chaser/explorer MARL experiment
-from Zhang et al. (2025).
+Modern PyTorch reproduction scaffold for the chaser/explorer multi-agent
+reinforcement learning experiment from Zhang et al. (2025).
 
-## Setup
+## Start Here
+
+This project trains two agents in a small grid world:
+
+- the **chaser** is rewarded for catching the explorer;
+- the **explorer** is rewarded for avoiding the chaser and visiting new cells;
+- the neural-analysis code asks whether the two agents develop shared internal
+  structure while interacting.
+
+If you are new to the project, read [docs/onboarding.md](docs/onboarding.md)
+first. It explains the vocabulary, the code-reading order, and a tiny experiment
+that is safe to run on a laptop.
+
+## First Commands
+
+Set up the environment and verify PyTorch:
 
 ```bash
 uv sync
-```
-
-## Verify
-
-```bash
 uv run python scripts/verify_torch.py
 ```
 
-The verification script checks the installed Python and PyTorch versions, reports MPS availability on macOS, and runs the RNN hidden-state projection used for the neural action subspace:
+Run a tiny training smoke test. This is only to confirm that the code path works;
+it is not a real research run.
 
-```text
-h_t = ReLU(W_input x_t + b_input + W_rec h_{t-1} + b_rec)
-projection = W_action.T W_action h_t
+```bash
+uv run train-marl \
+  --updates 1 \
+  --batch-size 2 \
+  --max-steps 5 \
+  --hidden-size 8 \
+  --device cpu \
+  --log-every 1 \
+  --checkpoint runs/onboarding-smoke/checkpoints/latest.safetensors
 ```
 
-## Train
+Expected output includes one `update=0001 ...` metrics line and a
+`saved_checkpoint=...` line.
+
+## Code Map
+
+- `mouse_run_run/env.py`: the grid world, rewards, visibility, and movement.
+- `mouse_run_run/policy.py`: the neural-network agents.
+- `mouse_run_run/training_config.py`: training presets, device selection, and
+  run configuration.
+- `mouse_run_run/training_rollout.py`: how agents collect one batch of
+  experience.
+- `mouse_run_run/ppo.py`: PPO loss, advantage calculation, and optimizer step.
+- `mouse_run_run/train.py`: the high-level training loop and checkpointing.
+- `mouse_run_run/analysis.py` and `mouse_run_run/plsc.py`: neural-representation
+  analyses.
+
+## Development Checks
+
+```bash
+uv run python -m compileall -q mouse_run_run scripts
+uv run python scripts/verify_torch.py
+uv run pytest
+uv run ruff check
+```
+
+## Regular Training
+
+The standard training command runs a batched chaser/explorer grid-world
+experiment with two independent PPO actor-critic policies:
 
 ```bash
 uv run train-marl --updates 200 --batch-size 40 --device cpu --run-dir runs/modern-social --checkpoint runs/modern-social/checkpoints/latest.safetensors
 ```
 
-The training script runs a batched chaser/explorer grid-world experiment with
-two independent recurrent PPO actor-critic policies. The environment follows the
-paper's main MARL task:
+The environment follows the paper's main MARL task:
 
 - 10x10 grid world
 - 7x7 partner vision
@@ -56,8 +99,13 @@ That is `80,000,000` environment steps for one agent pair.
 
 Fast training remains the default. To add the paper-text recurrent L2 penalty
 without changing the fast environment path, use `--preset paper_text`. The
-`official_code` preset exposes the stronger recurrent L2 and PPO clip settings
-found in the released code path.
+`official_code` preset switches to the released code's complete RLlib 2.2
+learning regime: separate optimizers, PyTorch-default initialization, 30 epochs
+of recurrent 128-step minibatches, sequence length 20, exact/adaptive KL,
+GAE lambda 1, value-loss coefficient 1, zero entropy bonus, no gradient
+clipping, PPO clip 0.3, and recurrent L2 coefficient 3. Pair it with
+`--spawn-mode official_exclude_last` to reproduce the released environment's
+initial-position range.
 
 Validate checkpoints:
 
@@ -127,7 +175,8 @@ excluded downstream without rewriting raw evidence. Degenerate episodes are
 those whose longest consecutive stuck run (stationary with a valid action,
 excluding collision-blocked steps) exceeds 1% of the episode length.
 
-Checkpoints saved with training state (optimizer, RNG, update index) support
+Checkpoints saved with training state (both optimizers, both adaptive KL
+coefficients, action/minibatch/CUDA RNG state, and update index) support
 resuming interrupted training:
 
 ```bash
@@ -141,6 +190,21 @@ The paper-scale experiment source of truth is:
 - `experiments/paper_marl_2026/SPEC.md`
 - `experiments/paper_marl_2026/configs/primary.json`
 - `experiments/paper_marl_2026/configs/smoke.json`
+
+The separate, algorithmically aligned rerun is specified in:
+
+- `experiments/paper_marl_official_dynamics_2026/SPEC.md`
+- `experiments/paper_marl_official_dynamics_2026/configs/smoke.json`
+- `experiments/paper_marl_official_dynamics_2026/configs/calibration_cuda.json`
+- `experiments/paper_marl_official_dynamics_2026/configs/official_code_l2.json`
+- `experiments/paper_marl_official_dynamics_2026/configs/methods_text_l2.json`
+
+Run its CPU smoke test before measuring the exact learner on the CUDA host:
+
+```bash
+uv run python scripts/run_local_experiment.py \
+  --config experiments/paper_marl_official_dynamics_2026/configs/smoke.json
+```
 
 Run the local smoke gate and smoke training:
 

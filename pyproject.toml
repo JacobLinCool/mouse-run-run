@@ -31,3 +31,9 @@ include = ["mouse_run_run*"]
 
 [tool.setuptools.package-data]
 mouse_run_run = ["viewer_static/*.html"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.15.20",
+]

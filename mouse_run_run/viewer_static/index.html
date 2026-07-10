@@ -640,7 +640,7 @@
           <select id="seedSelect"></select>
         </label>
         <label>
-          Checkpoint
+          Agent Pair Checkpoint
           <select id="stepSelect"></select>
         </label>
         <label>
@@ -900,8 +900,11 @@
         if (params.get("checkpoint") !== null) {
           checkpointPath.value = params.get("checkpoint");
           syncSelectorsFromPath(params.get("checkpoint"));
+        } else {
+          selectDefaultPair();
+          if (params.get("device") === null) deviceSelect.value = "cpu";
         }
-        if (params.get("checkpoint") !== null || params.get("autoload") === "1") {
+        if (checkpointPath.value || params.get("autoload") === "1") {
           await loadTrajectory();
           if (params.get("t") !== null) setFrame(Number(params.get("t")));
           if (params.get("ss") === "1") await computeSubspace();
@@ -965,6 +968,12 @@
       // Cascading selectors: architecture -> task -> seed -> checkpoint step.
       // checkpointPath (hidden) holds the resolved path for the rest of the app.
       const archOrder = ["RNN", "MLP", "SSM", "Transformer"];
+      const defaultPair = {
+        architecture: "RNN",
+        task: "social",
+        modelSeed: 4,
+        episodeSeed: 0,
+      };
       const fillSelect = (select, values, labelFn, keep) => {
         const prev = keep && values.some((v) => String(v) === select.value) ? select.value : null;
         select.innerHTML = "";
@@ -1054,6 +1063,21 @@
         stepSelect.value = item.path;
         resolveCheckpoint();
         return true;
+      }
+
+      function selectDefaultPair() {
+        const item = checkpoints.find(
+          (c) =>
+            (c.architecture_label || c.architecture) === defaultPair.architecture &&
+            c.task === defaultPair.task &&
+            c.seed === defaultPair.modelSeed &&
+            c.is_latest
+        );
+        if (!item) return false;
+        seedInput.value = String(defaultPair.episodeSeed);
+        opponentSelect.value = "self_play";
+        deterministicSelect.value = "true";
+        return syncSelectorsFromPath(item.path);
       }
 
       async function loadTrajectory() {

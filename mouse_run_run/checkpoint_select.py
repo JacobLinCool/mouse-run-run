@@ -15,6 +15,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from safetensors import SafetensorError
+
 from mouse_run_run.health import checkpoint_health
 from mouse_run_run.serialization import CHECKPOINT_FORMAT, read_metadata
 
@@ -99,7 +101,7 @@ def _format_checkpoints(root: Path) -> list[Path]:
     for candidate in sorted(root.rglob("*.safetensors")):
         try:
             metadata = read_metadata(candidate)
-        except Exception:
+        except (OSError, ValueError, SafetensorError):
             continue
         if metadata.get("format") == CHECKPOINT_FORMAT:
             checkpoints.append(candidate)

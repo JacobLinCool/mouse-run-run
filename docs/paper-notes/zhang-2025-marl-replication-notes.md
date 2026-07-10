@@ -315,9 +315,13 @@ Control:
 
 - Remove comparable random non-overlapping variance using top 25 random principal components from temporally permuted activity.
 
-## Current Modern Port Status
+## Current PyTorch Port Status
 
-The repo now implements a modern PyTorch port rather than an RLlib reproduction.
+The repo provides two explicitly separated training regimes. The completed
+`paper_marl_2026` experiments used the original fast full-batch learner through
+the `modern_fast`/`paper_text` presets. The new `official_code` preset preserves
+the vectorized PyTorch environment while reproducing the learning dynamics
+inherited by the released Ray RLlib 2.2 training script.
 
 Implemented:
 
@@ -366,10 +370,34 @@ Also implemented (2026-07-02 review round):
   kernel launches, and non-finite values necessarily propagate into the
   validated tensors.
 
+Official-dynamics learner implemented (2026-07-10):
+
+- Separate explorer and chaser parameters, Adam optimizers, optimizer moments,
+  and adaptive KL coefficients, with the official explorer-first policy order.
+- RLlib 2.2 PPO defaults inherited by the released script: learning rate
+  `5e-5`, GAE lambda `1.0`, 30 epochs, exact categorical KL penalty and target,
+  zero entropy bonus, no gradient clipping, and PyTorch-default initialization.
+- Recurrent `max_seq_len=20` batching and Ray 2.2's released 33-minibatch
+  slicing behavior, including the eight-step boundary overlap.
+- Exact resume of both policies, both optimizer states, adaptive KL state, and
+  action/minibatch/CUDA RNG state.
+- `official_exclude_last` spawn mode for the released code's `0..8` initial
+  coordinate range, while `full_grid` remains the declared paper-text/modern
+  regime.
+- CUDA Triton/reference environment equivalence, a healthy five-update
+  calibration, and zero-failure 10-worker capacity calibration are recorded in
+  `experiments/paper_marl_official_dynamics_2026/RUNS.md`.
+
 Remaining gaps:
 
-- This is not an exact RLlib 2.2 reproduction; PPO defaults (KL-penalty PPO) and sequence batching differ — the port uses clipped PPO.
-- It has not yet trained ten independent social/non-social seed pairs.
+- The new official-dynamics path is algorithmically aligned, not a bit-for-bit
+  recreation of Ray's five worker processes. Vectorized collection, random
+  number interleaving, and the newer PyTorch/CUDA kernels can produce different
+  trajectories.
+- The official-dynamics path has passed smoke and CUDA calibration, but has not
+  yet trained the declared ten independent social and ten non-social pairs.
+  Consequently, the completed `paper_marl_2026` results must remain labeled as
+  the earlier fast-learner reproduction until the new panel finishes.
 - PLSC shared-dimension extraction with temporal-permutation significance is
   implemented in `mouse_run_run/plsc.py` (the reusable core) and consumed by
   both `scripts/analysis/analyze_shared_neural.py` (offline: z-scored hidden
@@ -385,8 +413,11 @@ Remaining gaps:
   single-network diagnostics (PCA, rasters, event-triggered speed, visibility
   tuning), which are exploratory rather than a reproduction of the paper's
   cross-agent analyses.
-- The L2 regularization discrepancy between paper text (`lambda = 0.3`) and official code/demo params (`3.0`) is not resolved; the `paper_text` preset uses 0.3, `official_code` uses 3.0 (both as an unsquared Frobenius norm on the recurrent weights, exactly matching the official `custom_loss`).
-- Environment spawn domain is `0..grid_size-1` per paper text; the official code's `np.random.randint(height - 1)` never spawns on the last row/column (likely an off-by-one). This intentional difference changes the initial-state distribution slightly.
+- The L2 regularization discrepancy between paper text (`lambda = 0.3`) and
+  official code/demo params (`3.0`) cannot be resolved from the released
+  materials. The new experiment therefore pre-declares separate
+  `methods_text_l2` and `official_code_l2` sensitivity panels; both use the
+  official unsquared recurrent-weight norm.
 
 Recent smoke result:
 

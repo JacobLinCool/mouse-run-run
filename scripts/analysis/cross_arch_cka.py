@@ -5,12 +5,19 @@ degenerate) through every architecture's social chaser networks and compare
 the resulting representations. CKA is invariant to rotation/scaling, so it
 measures whether architectures encode the shared task the same way.
 """
-import json, itertools
+import json
 from pathlib import Path
-import numpy as np, torch
-from mouse_run_run.analysis import load_rollout, valid_episode_indices, replay_hidden, linear_cka
 
-EXPS = {"RNN":"mouse-run-run-1","MLP":"mouse-run-run-2-mlp","SSM":"mouse-run-run-2-ssm","Transformer":"mouse-run-run-2-transformer"}
+import torch
+
+from mouse_run_run.analysis import linear_cka, load_rollout, replay_hidden, valid_episode_indices
+
+EXPS = {
+    "RNN": "mouse-run-run-1",
+    "MLP": "mouse-run-run-2-mlp",
+    "SSM": "mouse-run-run-2-ssm",
+    "Transformer": "mouse-run-run-2-transformer",
+}
 # Common probe: chaser observations from 3 RNN social rollouts (non-degenerate).
 probe_files = sorted(Path("runs/mouse-run-run-1/paper_rollouts").glob("*social__seed_000[012]*"))[:3]
 probes = []
@@ -39,6 +46,7 @@ for a in names:
     row = []
     for b in names:
         c = linear_cka(reps[a], reps[b])
-        row.append(c); mat[f"{a}|{b}"] = c
+        row.append(c)
+        mat[f"{a}|{b}"] = c
     print(f"{a:11}" + "  ".join(f"{v:6.3f}" for v in row))
-json.dump(mat, open("runs/analyses/cross_arch_cka.json","w"), indent=1)
+json.dump(mat, open("runs/analyses/cross_arch_cka.json", "w"), indent=1)

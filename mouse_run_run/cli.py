@@ -3,6 +3,7 @@ from pathlib import Path
 
 from mouse_run_run.env import GridWorldConfig
 from mouse_run_run.train import DEVICE_CHOICES, TrainConfig, train
+from mouse_run_run.training_config import apply_preset_defaults, resolve_partner_visibility
 
 
 def main() -> None:
@@ -15,15 +16,20 @@ def main() -> None:
     parser.add_argument("--task", choices=("social", "non_social"), default="social")
     parser.add_argument("--partner-visibility", choices=("partial", "none", "full"))
     parser.add_argument(
+        "--spawn-mode",
+        choices=("full_grid", "official_exclude_last"),
+        default="full_grid",
+    )
+    parser.add_argument(
         "--architecture",
         choices=("rnn", "mlp", "ssm", "transformer"),
         default="rnn",
     )
     parser.add_argument("--hidden-size", type=int, default=256)
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--gae-lambda", type=float, default=0.95)
-    parser.add_argument("--ppo-epochs", type=int, default=4)
+    parser.add_argument("--gae-lambda", type=float)
+    parser.add_argument("--ppo-epochs", type=int)
     parser.add_argument(
         "--preset",
         choices=("modern_fast", "paper_text", "official_code"),
@@ -35,11 +41,20 @@ def main() -> None:
     parser.add_argument(
         "--value-clip",
         type=float,
-        default=10.0,
+        default=None,
         help="RLlib-style vf_clip_param: per-sample squared value error bound (0 disables).",
     )
     parser.add_argument("--recurrent-l2-coef", type=float)
     parser.add_argument("--grad-clip", type=float)
+    parser.add_argument("--sgd-minibatch-size", type=int)
+    parser.add_argument("--max-seq-len", type=int)
+    parser.add_argument("--kl-coeff", type=float)
+    parser.add_argument("--kl-target", type=float)
+    parser.add_argument("--learner-mode", choices=("full_batch", "rllib_2_2"))
+    parser.add_argument(
+        "--rnn-initialization",
+        choices=("modern", "pytorch_default"),
+    )
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="cpu")
     parser.add_argument("--log-every", type=int, default=20)
@@ -67,18 +82,15 @@ def main() -> None:
         help="Checkpoint with training state to resume from.",
     )
     args = parser.parse_args()
-    _apply_preset(args)
-
-    partner_visibility = args.partner_visibility
-    if partner_visibility is None:
-        partner_visibility = "none" if args.task == "non_social" else "partial"
+    apply_preset_defaults(args)
 
     env = GridWorldConfig(
         grid_size=args.grid_size,
         vision_radius=args.vision_radius,
         max_steps=args.max_steps,
         task=args.task,
-        partner_visibility=partner_visibility,
+        partner_visibility=resolve_partner_visibility(args.task, args.partner_visibility),
+        spawn_mode=args.spawn_mode,
     )
     config = TrainConfig(
         updates=args.updates,
@@ -95,6 +107,12 @@ def main() -> None:
         value_clip=args.value_clip,
         recurrent_l2_coef=args.recurrent_l2_coef,
         grad_clip=args.grad_clip,
+        sgd_minibatch_size=args.sgd_minibatch_size,
+        max_seq_len=args.max_seq_len,
+        kl_coeff=args.kl_coeff,
+        kl_target=args.kl_target,
+        learner_mode=args.learner_mode,
+        rnn_initialization=args.rnn_initialization,
         seed=args.seed,
         device=args.device,
         log_every=args.log_every,
@@ -116,32 +134,3 @@ def main() -> None:
         env=env,
     )
     train(config)
-
-
-def _apply_preset(args: argparse.Namespace) -> None:
-    defaults = {
-        "modern_fast": {
-            "clip_epsilon": 0.2,
-            "entropy_coef": 0.01,
-            "value_coef": 0.5,
-            "recurrent_l2_coef": 0.0,
-            "grad_clip": 1.0,
-        },
-        "paper_text": {
-            "clip_epsilon": 0.2,
-            "entropy_coef": 0.01,
-            "value_coef": 0.5,
-            "recurrent_l2_coef": 0.3,
-            "grad_clip": 1.0,
-        },
-        "official_code": {
-            "clip_epsilon": 0.3,
-            "entropy_coef": 0.01,
-            "value_coef": 0.5,
-            "recurrent_l2_coef": 3.0,
-            "grad_clip": 1.0,
-        },
-    }[args.preset]
-    for key, value in defaults.items():
-        if getattr(args, key) is None:
-            setattr(args, key, value)

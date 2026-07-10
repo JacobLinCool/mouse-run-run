@@ -24,6 +24,51 @@ PRIMARY_EXPECTATIONS = {
     "subspace_metric_period": 10,
 }
 
+# Source IDs below resolve in the official-dynamics SPEC's "Implementation
+# Source Registry". [PAPER-METHODS] fixes the reportable scale;
+# [OFFICIAL-TRAIN]/[OFFICIAL-ARENAS] fix released-code environment semantics.
+# Device, TF32, finite_guard, Triton, fused rollout, and metric cadence are
+# [LOCAL-CALIBRATION] execution choices and must not be described as paper
+# constants.
+OFFICIAL_DYNAMICS_EXPECTATIONS = {
+    "updates": 20_000,
+    "batch_size": 40,
+    "max_steps": 100,
+    "seeds": 10,
+    "seed_start": 0,
+    "tasks": "both",
+    "preset": "official_code",
+    "spawn_mode": "official_exclude_last",
+    "device": "cuda",
+    "cuda_tf32": False,
+    "finite_guard": True,
+    "triton_env_step": True,
+    "fused_agent_rollout": True,
+    "subspace_metric_period": 10,
+}
+
+# This gate intentionally duplicates the resolved preset so a silent preset
+# drift fails before a full launch. Numeric sources are [RAY-PPO-CONFIG],
+# [OFFICIAL-TRAIN], and [OFFICIAL-MODEL]; loss semantics are [RAY-PPO-LOSS].
+OFFICIAL_LEARNER_EXPECTATIONS = {
+    "architecture": "rnn",
+    "gamma": 0.99,
+    "gae_lambda": 1.0,
+    "learning_rate": 5e-5,
+    "ppo_epochs": 30,
+    "clip_epsilon": 0.3,
+    "entropy_coef": 0.0,
+    "value_coef": 1.0,
+    "value_clip": 10.0,
+    "grad_clip": None,
+    "sgd_minibatch_size": 128,
+    "max_seq_len": 20,
+    "kl_coeff": 0.2,
+    "kl_target": 0.01,
+    "learner_mode": "rllib_2_2",
+    "rnn_initialization": "pytorch_default",
+}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -113,7 +158,11 @@ def _check_config_schema(config: dict[str, Any]) -> dict[str, Any]:
 
 def _check_primary_expectations(config: dict[str, Any]) -> list[dict[str, Any]]:
     checks = []
-    expectations = dict(PRIMARY_EXPECTATIONS)
+    expectations = dict(
+        OFFICIAL_DYNAMICS_EXPECTATIONS
+        if config.get("preset") == "official_code"
+        else PRIMARY_EXPECTATIONS
+    )
     # The fused rollout fast path exists for rnn and ssm; other architecture
     # variants must run with it disabled.
     if config.get("architecture", "rnn") not in ("rnn", "ssm"):
@@ -124,6 +173,29 @@ def _check_primary_expectations(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "name": f"primary_{key}",
                 "ok": config.get(key) == expected,
                 "detail": {"expected": expected, "actual": config.get(key)},
+            }
+        )
+    if config.get("preset") == "official_code":
+        for key, expected in OFFICIAL_LEARNER_EXPECTATIONS.items():
+            # Omitted values resolve from the named preset; explicit values
+            # must remain identical to the audited upstream contract.
+            actual = config.get(key, expected)
+            checks.append(
+                {
+                    "name": f"official_learner_{key}",
+                    "ok": actual == expected,
+                    "detail": {"expected": expected, "actual": actual},
+                }
+            )
+        expected_l2 = (
+            0.3 if "methods" in str(config.get("experiment", "")) else 3.0
+        )
+        actual_l2 = config.get("recurrent_l2_coef", 3.0)
+        checks.append(
+            {
+                "name": "official_learner_recurrent_l2_coef",
+                "ok": actual_l2 == expected_l2,
+                "detail": {"expected": expected_l2, "actual": actual_l2},
             }
         )
     checks.append(

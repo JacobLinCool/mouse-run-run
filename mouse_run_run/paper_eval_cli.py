@@ -8,6 +8,8 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from safetensors import SafetensorError
+
 from mouse_run_run.checkpoint_select import checkpoint_identity, select_checkpoints
 from mouse_run_run.evaluate import evaluate_checkpoint
 from mouse_run_run.health import checkpoint_health
@@ -82,8 +84,19 @@ def main() -> None:
             checkpoint_metrics = None
             try:
                 config, checkpoint_metrics = read_checkpoint_metadata(checkpoint)
-            except Exception:
-                pass
+            except (
+                OSError,
+                ValueError,
+                KeyError,
+                json.JSONDecodeError,
+                SafetensorError,
+            ) as exc:
+                print(
+                    f"warning: checkpoint_metadata_unreadable={checkpoint} "
+                    f"error={type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             if not health.ok:
                 failure_count += 1
                 for opponent_mode in pending_modes:

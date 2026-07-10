@@ -33,7 +33,6 @@ def main() -> None:
 
     runs = _read_jsonl(tables_root / "runs.jsonl")
     evaluations = _read_jsonl(tables_root / "evaluations.jsonl")
-    rollouts = _read_jsonl(tables_root / "rollouts.jsonl")
     exclusions = _read_jsonl(tables_root / "exclusions.jsonl")
 
     figures = [] if args.no_figures else _generate_figures(output_root, runs, evaluations)

@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "article": {
+    "citation": "Zhang et al. (2025), Nature 645, 991-1001",
+    "doi": "https://doi.org/10.1038/s41586-025-09196-4",
+    "fig5_source_data": "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-025-09196-4/MediaObjects/41586_2025_9196_MOESM7_ESM.xlsx",
+    "fig6_source_data": "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-025-09196-4/MediaObjects/41586_2025_9196_MOESM8_ESM.xlsx"
+  },
+  "summary_method": "Mean and sample SD recomputed from the official Nature source-data workbooks. Published boxplots show median and IQR; these derived mean +/- SD values are used for like-for-like comparison with our report.",
+  "behavior_at_iteration_20000": [
+    {
+      "key": "chaser_collisions",
+      "panel": "Fig. 5i",
+      "label": "Chaser collisions / episode",
+      "unit": "count",
+      "paper_social": { "n": 10, "mean": 16.059, "sd": 2.6771645448 },
+      "paper_non_social": { "n": 10, "mean": 3.19, "sd": 0.3571180944 }
+    },
+    {
+      "key": "chaser_partner_vision",
+      "panel": "Fig. 5j",
+      "label": "Chaser partner in vision",
+      "unit": "percent",
+      "paper_social": { "n": 10, "mean": 86.3615, "sd": 6.9984764413 },
+      "paper_non_social": { "n": 10, "mean": 36.161, "sd": 1.5491248425 }
+    },
+    {
+      "key": "chaser_average_distance",
+      "panel": "Fig. 5k",
+      "label": "Chaser average distance",
+      "unit": "distance",
+      "paper_social": { "n": 10, "mean": 3.03595, "sd": 0.4723580092 },
+      "paper_non_social": { "n": 10, "mean": 6.442985, "sd": 0.1210808799 }
+    },
+    {
+      "key": "chaser_new_fields",
+      "panel": "Fig. 5l",
+      "label": "Chaser new fields",
+      "unit": "count",
+      "paper_social": { "n": 10, "mean": 30.769, "sd": 1.8655380517 },
+      "paper_non_social": { "n": 10, "mean": 72.39, "sd": 3.8562244056 }
+    },
+    {
+      "key": "explorer_new_fields",
+      "panel": "Fig. 5m",
+      "label": "Explorer new fields",
+      "unit": "count",
+      "paper_social": { "n": 10, "mean": 35.734, "sd": 6.9986986092 },
+      "paper_non_social": { "n": 10, "mean": 58.675, "sd": 3.2354159959 }
+    },
+    {
+      "key": "explorer_average_distance",
+      "panel": "Fig. 5n",
+      "label": "Explorer average distance",
+      "unit": "distance",
+      "paper_social": { "n": 10, "mean": 7.712465, "sd": 0.3838016697 },
+      "paper_non_social": { "n": 10, "mean": 6.56247, "sd": 0.1222001414 }
+    }
+  ],
+  "decoding": [
+    {
+      "key": "chaser_collision",
+      "panel": "Fig. 6b",
+      "label": "Chaser: collision",
+      "paper_social": { "n": 10, "mean": 0.9492873172, "sd": 0.0195858346 },
+      "paper_non_social": { "n": 10, "mean": 0.5, "sd": 0.0 }
+    },
+    {
+      "key": "chaser_partner_escape",
+      "panel": "Fig. 6c",
+      "label": "Chaser: partner escape",
+      "paper_social": { "n": 10, "mean": 0.8863283391, "sd": 0.1257426231 },
+      "paper_non_social": { "n": 10, "mean": 0.520210908, "sd": 0.0264292791 }
+    },
+    {
+      "key": "explorer_collision",
+      "panel": "Fig. 6d",
+      "label": "Explorer: collision",
+      "paper_social": { "n": 10, "mean": 0.9421951994, "sd": 0.039898979 },
+      "paper_non_social": { "n": 10, "mean": 0.5, "sd": 0.0 }
+    },
+    {
+      "key": "explorer_partner_approach",
+      "panel": "Fig. 6e",
+      "label": "Explorer: partner approach",
+      "paper_social": null,
+      "paper_non_social": null,
+      "source_note": "The official Fig. 6 source-data workbook contains an empty Fig. 6e sheet. The published plot is approximately 0.9 for social and 0.5 for non-social agents, so no exact source-data summary is reported here."
+    }
+  ],
+  "shared_dimensions": {
+    "significant_dimension_count": {
+      "panel": "Fig. 6g",
+      "paper_social": { "n": 56, "mean": 164.6891655098, "sd": 51.9540351823 },
+      "paper_non_social": { "n": 59, "mean": 0.015474298, "sd": 0.0470861826 },
+      "paper_non_social_with_vision": { "n": 59, "mean": 0.1672306541, "sd": 0.585086316 }
+    },
+    "delta_pcc": {
+      "panel": "Fig. 6h",
+      "paper_social": { "n": 56, "mean": 0.4059917417, "sd": 0.0460029333 },
+      "paper_non_social": { "n": 59, "mean": -0.0003309429, "sd": 0.0270907513 },
+      "paper_non_social_with_vision": { "n": 59, "mean": 0.0354233845, "sd": 0.0503439428 }
+    },
+    "comparison_note": "The paper pools late-training checkpoints and reports chance-subtracted PCC. Our headline top-r is a raw or time-residualized correlation at the final checkpoint, so the magnitudes are not directly interchangeable."
+  },
+  "partner_representation": {
+    "panel": "Fig. 6p-r",
+    "paper_early_social_percent": { "n": 10, "mean": 0.6863773171, "sd": 0.1956329405 },
+    "paper_late_social_percent": { "n": 10, "mean": 4.3741689066, "sd": 1.5799676779 },
+    "paper_early_non_social_percent": { "n": 10, "mean": 0.5729450851, "sd": 0.1371335351 },
+    "paper_late_non_social_percent": { "n": 10, "mean": 0.3945570753, "sd": 0.1652833439 },
+    "paper_social_correlation": { "n": 219, "r": 0.6106540479, "r_squared": 0.3728983713 },
+    "paper_non_social_correlation": { "n": 220, "r": -0.0550012859, "r_squared": 0.0030251414 }
+  },
+  "perturbation": [
+    {
+      "key": "collisions",
+      "panel": "Fig. 6s",
+      "label": "Collisions / episode",
+      "paper_original": { "n": 10, "mean": 17.488, "sd": 5.7198927729 },
+      "paper_shared_removed": { "n": 10, "mean": 4.548, "sd": 3.7620821658 },
+      "paper_random_removed": { "n": 10, "mean": 16.91, "sd": 11.5921017172 }
+    },
+    {
+      "key": "partner_in_vision",
+      "panel": "Fig. 6t",
+      "label": "Partner in vision (%)",
+      "paper_original": { "n": 10, "mean": 89.516, "sd": 5.4536658415 },
+      "paper_shared_removed": { "n": 10, "mean": 46.942, "sd": 22.1532750526 },
+      "paper_random_removed": { "n": 10, "mean": 81.892, "sd": 11.6469135635 }
+    },
+    {
+      "key": "average_distance",
+      "panel": "Fig. 6u",
+      "label": "Average distance",
+      "paper_original": { "n": 10, "mean": 2.3157428048, "sd": 0.246137543 },
+      "paper_shared_removed": { "n": 10, "mean": 4.7549184268, "sd": 1.2433607633 },
+      "paper_random_removed": { "n": 10, "mean": 2.6859708365, "sd": 0.6154092697 }
+    }
+  ]
+}
