@@ -2,8 +2,13 @@ import argparse
 from pathlib import Path
 
 from mouse_run_run.env import GridWorldConfig
-from mouse_run_run.train import DEVICE_CHOICES, TrainConfig, train
-from mouse_run_run.training_config import apply_preset_defaults, resolve_partner_visibility
+from mouse_run_run.train import train
+from mouse_run_run.training_config import (
+    DEVICE_CHOICES,
+    TrainConfig,
+    apply_preset_defaults,
+    resolve_partner_visibility,
+)
 
 
 def main() -> None:

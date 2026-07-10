@@ -27,9 +27,9 @@ from mouse_run_run.analysis import chaser_action_weight, partner_representation
 from mouse_run_run.env import GridWorldConfig
 from mouse_run_run.policy import build_policy
 from mouse_run_run.provenance import collect_provenance, write_json_atomic
-from mouse_run_run.rollout import _collect_batch
+from mouse_run_run.rollout import collect_batch
 from mouse_run_run.serialization import load_checkpoint
-from mouse_run_run.train import select_device
+from mouse_run_run.training_config import select_device
 
 
 @torch.no_grad()
@@ -50,7 +50,7 @@ def measure_checkpoint(
     explorer.load_state_dict(explorer_state)
     chaser.eval()
     explorer.eval()
-    tensors = _collect_batch(
+    tensors = collect_batch(
         env_config=env_config,
         batch_size=episodes,
         chaser=chaser,

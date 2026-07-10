@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from mouse_run_run.train import DEVICE_CHOICES
-from mouse_run_run.viewer_http import _ViewerHandler, _ViewerServer
+from mouse_run_run.training_config import DEVICE_CHOICES
+from mouse_run_run.viewer_http import ViewerHandler, ViewerServer
 
 
 def main() -> None:
@@ -15,9 +15,9 @@ def main() -> None:
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
     args = parser.parse_args()
 
-    server = _ViewerServer(
+    server = ViewerServer(
         (args.host, args.port),
-        _ViewerHandler,
+        ViewerHandler,
         runs_root=args.runs_root.resolve(),
         default_device=args.device,
     )

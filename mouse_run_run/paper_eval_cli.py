@@ -14,7 +14,7 @@ from mouse_run_run.checkpoint_select import checkpoint_identity, select_checkpoi
 from mouse_run_run.evaluate import evaluate_checkpoint
 from mouse_run_run.health import checkpoint_health
 from mouse_run_run.serialization import read_checkpoint_metadata
-from mouse_run_run.train import DEVICE_CHOICES
+from mouse_run_run.training_config import DEVICE_CHOICES
 
 
 PAPER_RANDOM_OPPONENT_MODES = ("random_explorer", "random_chaser")

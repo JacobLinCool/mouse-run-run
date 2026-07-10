@@ -9,7 +9,7 @@ from mouse_run_run.degenerate import episode_degeneracy
 from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
 from mouse_run_run.policy import PolicyBase, build_policy
 from mouse_run_run.serialization import load_checkpoint
-from mouse_run_run.train import select_device
+from mouse_run_run.training_config import select_device
 
 
 OpponentMode = Literal["self_play", "random_chaser", "random_explorer"]

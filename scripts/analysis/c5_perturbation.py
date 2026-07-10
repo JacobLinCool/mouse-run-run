@@ -30,7 +30,7 @@ from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
 from mouse_run_run.policy import build_policy
 from mouse_run_run.provenance import collect_provenance, write_json_atomic
 from mouse_run_run.serialization import load_checkpoint
-from mouse_run_run.train import select_device
+from mouse_run_run.training_config import select_device
 
 
 @torch.no_grad()

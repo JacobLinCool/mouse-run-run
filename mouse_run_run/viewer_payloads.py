@@ -16,9 +16,9 @@ from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
 from mouse_run_run.evaluate import OpponentMode
 from mouse_run_run.plsc import compute_plsc, project_norms, shared_variance_fraction
 from mouse_run_run.policy import build_policy
-from mouse_run_run.rollout import _collect_batch
+from mouse_run_run.rollout import collect_batch
 from mouse_run_run.serialization import CHECKPOINT_FORMAT, load_checkpoint, read_metadata
-from mouse_run_run.train import select_device
+from mouse_run_run.training_config import select_device
 
 
 ACTION_LABELS = ("U", "R", "D", "L")
@@ -330,7 +330,7 @@ def compute_shared_subspace(
     chaser.eval()
     explorer.eval()
 
-    batch = _collect_batch(
+    batch = collect_batch(
         env_config=env_config,
         batch_size=episodes,
         chaser=chaser,

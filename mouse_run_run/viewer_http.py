@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from mouse_run_run.train import DEVICE_CHOICES
+from mouse_run_run.training_config import DEVICE_CHOICES
 from mouse_run_run.viewer_payloads import (
     _clamp_int,
     _first,
@@ -24,7 +24,7 @@ from mouse_run_run.viewer_payloads import (
 STATIC_DIR = Path(__file__).with_name("viewer_static")
 
 
-class _ViewerServer(ThreadingHTTPServer):
+class ViewerServer(ThreadingHTTPServer):
     def __init__(
         self,
         server_address: tuple[str, int],
@@ -39,8 +39,8 @@ class _ViewerServer(ThreadingHTTPServer):
         self.project_root = Path.cwd().resolve()
 
 
-class _ViewerHandler(BaseHTTPRequestHandler):
-    server: _ViewerServer
+class ViewerHandler(BaseHTTPRequestHandler):
+    server: ViewerServer
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)

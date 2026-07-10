@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from mouse_run_run.rollout import collect_rollouts
-from mouse_run_run.train import DEVICE_CHOICES
+from mouse_run_run.training_config import DEVICE_CHOICES
 
 
 def main() -> None:

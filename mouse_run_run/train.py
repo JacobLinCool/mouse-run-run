@@ -15,17 +15,16 @@ from mouse_run_run.health import (
 )
 from mouse_run_run.observability import TrainingObserver
 from mouse_run_run.policy import PolicyBase, build_policy
-from mouse_run_run.ppo import _ppo_update
+from mouse_run_run.ppo import ppo_update
 from mouse_run_run.serialization import TrainingState, load_checkpoint, load_training_state, save_checkpoint
 from mouse_run_run.training_config import (
-    DEVICE_CHOICES as DEVICE_CHOICES,
     TrainConfig,
     checkpoint_config,
     configure_device_math,
     select_device,
     validate_train_config,
 )
-from mouse_run_run.training_rollout import _collect_rollout
+from mouse_run_run.training_rollout import collect_rollout
 from mouse_run_run.training_types import LearnerState, Rollout, RolloutMetrics, empty_metrics
 
 
@@ -111,7 +110,7 @@ def train(
             should_log = _should_log(config, update)
             should_checkpoint = _should_checkpoint(config, update, last_checkpoint_at)
             should_capture_metrics = should_log or should_checkpoint or observer.due()
-            rollout = _collect_rollout(
+            rollout = collect_rollout(
                 config=config,
                 env=env,
                 chaser=chaser,
@@ -121,7 +120,7 @@ def train(
             )
             if config.finite_guard:
                 _assert_rollout_finite(rollout)
-            captured_metrics = _ppo_update(
+            captured_metrics = ppo_update(
                 config=config,
                 rollout=rollout,
                 chaser=chaser,

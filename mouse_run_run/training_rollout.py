@@ -3,13 +3,12 @@ import torch
 from mouse_run_run.env import BatchedChaseEnv
 from mouse_run_run.health import module_max_abs
 from mouse_run_run.policy import PolicyBase, PolicyOutput, RNNActorCritic
-from mouse_run_run.ppo import _gae, _normalize, _sample_categorical
 from mouse_run_run.training_config import TrainConfig
 from mouse_run_run.training_types import AgentRollout, Rollout, RolloutMetrics, empty_metrics
 
 
 @torch.no_grad()
-def _collect_rollout(
+def collect_rollout(
     *,
     config: TrainConfig,
     env: BatchedChaseEnv,
@@ -137,11 +136,11 @@ def _collect_rollout(
         if config.learner_mode == "rllib_2_2":
             # [OFFICIAL-TRAIN] policy-map order: policy1/explorer samples before
             # policy2/chaser. Source IDs resolve in the official-dynamics SPEC.
-            explorer_action, explorer_log_prob = _sample_categorical(explorer_output.logits)
-            chaser_action, chaser_log_prob = _sample_categorical(chaser_output.logits)
+            explorer_action, explorer_log_prob = sample_categorical(explorer_output.logits)
+            chaser_action, chaser_log_prob = sample_categorical(chaser_output.logits)
         else:
-            chaser_action, chaser_log_prob = _sample_categorical(chaser_output.logits)
-            explorer_action, explorer_log_prob = _sample_categorical(explorer_output.logits)
+            chaser_action, chaser_log_prob = sample_categorical(chaser_output.logits)
+            explorer_action, explorer_log_prob = sample_categorical(explorer_output.logits)
 
         if config.triton_env_step:
             result = env.step_training_fused(chaser_action, explorer_action)
@@ -183,14 +182,14 @@ def _collect_rollout(
         chaser_hidden = chaser_output.state
         explorer_hidden = explorer_output.state
 
-    chaser_advantage, chaser_return = _gae(
+    chaser_advantage, chaser_return = gae(
         rewards=chaser_reward_tensor,
         values=chaser_value_tensor,
         dones=done_tensor,
         gamma=config.gamma,
         gae_lambda=config.gae_lambda,
     )
-    explorer_advantage, explorer_return = _gae(
+    explorer_advantage, explorer_return = gae(
         rewards=explorer_reward_tensor,
         values=explorer_value_tensor,
         dones=done_tensor,
@@ -213,7 +212,7 @@ def _collect_rollout(
         rewards=chaser_reward_tensor.detach(),
         # [RAY-SGD-SLICING] standardizes each policy batch independently and
         # clamps the denominator to 1e-4.
-        advantages=_normalize(
+        advantages=normalize_advantages(
             chaser_advantage,
             min_std=1e-4 if config.learner_mode == "rllib_2_2" else None,
         ).detach(),
@@ -234,7 +233,7 @@ def _collect_rollout(
         old_values=explorer_value_tensor.detach(),
         rewards=explorer_reward_tensor.detach(),
         # [RAY-SGD-SLICING], independently for the explorer policy batch.
-        advantages=_normalize(
+        advantages=normalize_advantages(
             explorer_advantage,
             min_std=1e-4 if config.learner_mode == "rllib_2_2" else None,
         ).detach(),
@@ -271,6 +270,42 @@ def _collect_rollout(
             explorer_kl_coeff=config.kl_coeff,
         )
     return Rollout(chaser=chaser_agent, explorer=explorer_agent, metrics=metrics)
+
+
+def sample_categorical(logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    gumbel = -torch.empty_like(logits).exponential_().log()
+    action = (logits + gumbel).argmax(dim=-1)
+    log_prob = logits.log_softmax(dim=-1).gather(
+        dim=-1,
+        index=action.unsqueeze(-1),
+    ).squeeze(-1)
+    return action, log_prob
+
+
+def gae(
+    *,
+    rewards: torch.Tensor,
+    values: torch.Tensor,
+    dones: torch.Tensor,
+    gamma: float,
+    gae_lambda: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    advantages = torch.zeros_like(rewards)
+    last_advantage = torch.zeros_like(rewards[0])
+    next_value = torch.zeros_like(rewards[0])
+    for step in range(rewards.shape[0] - 1, -1, -1):
+        nonterminal = (~dones[step]).float()
+        delta = rewards[step] + gamma * next_value * nonterminal - values[step]
+        last_advantage = delta + gamma * gae_lambda * nonterminal * last_advantage
+        advantages[step] = last_advantage
+        next_value = values[step]
+    return advantages, advantages + values
+
+
+def normalize_advantages(values: torch.Tensor, *, min_std: float | None = None) -> torch.Tensor:
+    std = values.std(unbiased=False)
+    denominator = std.clamp_min(min_std) if min_std is not None else std + 1e-8
+    return (values - values.mean()) / denominator
 
 
 def _flat_position(position: torch.Tensor, grid_size: int) -> torch.Tensor:

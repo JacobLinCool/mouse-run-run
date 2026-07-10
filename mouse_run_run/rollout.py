@@ -11,7 +11,7 @@ from mouse_run_run.env import BatchedChaseEnv, GridWorldConfig
 from mouse_run_run.evaluate import OpponentMode
 from mouse_run_run.policy import PolicyBase, build_policy
 from mouse_run_run.serialization import load_checkpoint, save_rollout
-from mouse_run_run.train import select_device
+from mouse_run_run.training_config import select_device
 
 
 # Tensors aligned with states s_0..s_T (length max_steps + 1 along dim 0).
@@ -71,7 +71,7 @@ def collect_rollouts(
     while completed < episodes:
         current_batch_size = min(batch_size, episodes - completed)
         chunks.append(
-            _collect_batch(
+            collect_batch(
                 env_config=env_config,
                 batch_size=current_batch_size,
                 chaser=chaser,
@@ -119,7 +119,7 @@ def collect_rollouts(
 
 
 @torch.no_grad()
-def _collect_batch(
+def collect_batch(
     *,
     env_config: GridWorldConfig,
     batch_size: int,

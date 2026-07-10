@@ -39,7 +39,7 @@ class _PolicyUpdateStats:
     grad_norm: float
 
 
-def _ppo_update(
+def ppo_update(
     *,
     config: TrainConfig,
     rollout: Rollout,
@@ -621,16 +621,6 @@ def _evaluate_actions(
     return action_log_probs, values, entropy
 
 
-def _sample_categorical(logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    gumbel = -torch.empty_like(logits).exponential_().log()
-    action = (logits + gumbel).argmax(dim=-1)
-    log_prob = logits.log_softmax(dim=-1).gather(
-        dim=-1,
-        index=action.unsqueeze(-1),
-    ).squeeze(-1)
-    return action, log_prob
-
-
 def _clipped_policy_loss(
     *,
     log_prob: torch.Tensor,
@@ -641,29 +631,3 @@ def _clipped_policy_loss(
     ratio = (log_prob - old_log_prob).exp()
     clipped_ratio = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
     return -torch.minimum(ratio * advantage, clipped_ratio * advantage).mean()
-
-
-def _gae(
-    *,
-    rewards: torch.Tensor,
-    values: torch.Tensor,
-    dones: torch.Tensor,
-    gamma: float,
-    gae_lambda: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    advantages = torch.zeros_like(rewards)
-    last_advantage = torch.zeros_like(rewards[0])
-    next_value = torch.zeros_like(rewards[0])
-    for step in range(rewards.shape[0] - 1, -1, -1):
-        nonterminal = (~dones[step]).float()
-        delta = rewards[step] + gamma * next_value * nonterminal - values[step]
-        last_advantage = delta + gamma * gae_lambda * nonterminal * last_advantage
-        advantages[step] = last_advantage
-        next_value = values[step]
-    return advantages, advantages + values
-
-
-def _normalize(values: torch.Tensor, *, min_std: float | None = None) -> torch.Tensor:
-    std = values.std(unbiased=False)
-    denominator = std.clamp_min(min_std) if min_std is not None else std + 1e-8
-    return (values - values.mean()) / denominator
