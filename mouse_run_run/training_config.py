@@ -1,10 +1,12 @@
-from dataclasses import asdict, dataclass
+import argparse
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 
-from mouse_run_run.env import GridWorldConfig, PartnerVisibility, TaskName
+from mouse_run_run.env import GridWorldConfig, PartnerVisibility, SpawnMode, TaskName
 
 
 # Source IDs used below are defined with fixed commit/tag permalinks in
@@ -13,6 +15,9 @@ from mouse_run_run.env import GridWorldConfig, PartnerVisibility, TaskName
 # [OFFICIAL-TRAIN], [OFFICIAL-MODEL], and [RAY-PPO-CONFIG] are upstream
 # experimental sources; [LOCAL-CALIBRATION] marks our execution choices.
 DEVICE_CHOICES = ("auto", "cpu", "mps", "cuda")
+ARCHITECTURE_CHOICES = ("rnn", "mlp", "ssm", "transformer")
+SPAWN_MODE_CHOICES = ("full_grid", "official_exclude_last")
+PRESET_CHOICES = ("modern_fast", "paper_text", "official_code")
 TrainingPreset = Literal["modern_fast", "paper_text", "official_code"]
 LearnerMode = Literal["full_batch", "rllib_2_2"]
 RNNInitialization = Literal["modern", "pytorch_default"]
@@ -162,13 +167,201 @@ class TrainConfig:
     env: GridWorldConfig = GridWorldConfig()
 
 
-def apply_preset_defaults(target: object, preset: TrainingPreset | None = None) -> None:
+def add_training_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    updates: int,
+    preset: TrainingPreset | None,
+    device: str,
+    devices: tuple[str, ...] = DEVICE_CHOICES,
+    architectures: tuple[str, ...] = ARCHITECTURE_CHOICES,
+    spawn_mode: SpawnMode = "full_grid",
+    cuda_tf32: bool = True,
+    subspace_metric_period: int = 1,
+    triton_env_step: bool = False,
+    fused_agent_rollout: bool = False,
+) -> None:
+    """Register the shared training hyperparameter flags.
+
+    Keyword parameters are the per-command deltas; ``preset=None`` makes
+    ``--preset`` required. Learner flags that default to ``None`` are filled
+    from the preset by :func:`apply_preset_defaults` after parsing.
+    """
+    parser.add_argument("--updates", type=int, default=updates)
+    # 40 complete 100-step episodes = 4,000 env steps/update [PAPER-METHODS].
+    parser.add_argument("--batch-size", type=int, default=40)
+    parser.add_argument("--max-steps", type=int, default=100)
+    parser.add_argument("--spawn-mode", choices=SPAWN_MODE_CHOICES, default=spawn_mode)
+    parser.add_argument("--architecture", choices=architectures, default="rnn")
+    parser.add_argument("--hidden-size", type=int, default=256)
+    parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--gae-lambda", type=float)
+    parser.add_argument("--learning-rate", type=float)
+    parser.add_argument("--ppo-epochs", type=int)
+    if preset is None:
+        parser.add_argument("--preset", choices=PRESET_CHOICES, required=True)
+    else:
+        parser.add_argument("--preset", choices=PRESET_CHOICES, default=preset)
+    parser.add_argument("--clip-epsilon", type=float)
+    parser.add_argument("--entropy-coef", type=float)
+    parser.add_argument("--value-coef", type=float)
+    parser.add_argument(
+        "--value-clip",
+        type=float,
+        default=None,
+        help="RLlib-style vf_clip_param: per-sample squared value error bound (0 disables).",
+    )
+    parser.add_argument("--recurrent-l2-coef", type=float)
+    parser.add_argument("--grad-clip", type=float)
+    parser.add_argument("--sgd-minibatch-size", type=int)
+    parser.add_argument("--max-seq-len", type=int)
+    parser.add_argument("--kl-coeff", type=float)
+    parser.add_argument("--kl-target", type=float)
+    parser.add_argument("--learner-mode", choices=("full_batch", "rllib_2_2"))
+    parser.add_argument("--rnn-initialization", choices=("modern", "pytorch_default"))
+    parser.add_argument("--device", choices=devices, default=device)
+    parser.add_argument("--cuda-tf32", action=argparse.BooleanOptionalAction, default=cuda_tf32)
+    parser.add_argument("--subspace-metric-period", type=int, default=subspace_metric_period)
+    parser.add_argument(
+        "--triton-env-step", action=argparse.BooleanOptionalAction, default=triton_env_step
+    )
+    parser.add_argument(
+        "--fused-agent-rollout",
+        action=argparse.BooleanOptionalAction,
+        default=fused_agent_rollout,
+    )
+    parser.add_argument("--finite-guard", action=argparse.BooleanOptionalAction, default=True)
+
+
+def apply_preset_defaults(args: argparse.Namespace, preset: TrainingPreset | None = None) -> None:
     """Fill unset learner hyperparameters from a named training preset."""
-    preset_name = preset or getattr(target, "preset")
-    defaults = TRAINING_PRESETS[preset_name]
+    defaults = TRAINING_PRESETS[preset if preset is not None else args.preset]
     for key, value in asdict(defaults).items():
-        if getattr(target, key, None) is None:
-            setattr(target, key, value)
+        if getattr(args, key) is None:
+            setattr(args, key, value)
+
+
+def config_payload(args: argparse.Namespace) -> dict[str, Any]:
+    """Serialize the flags of add_training_arguments into a JSON-ready payload."""
+    return {
+        "updates": args.updates,
+        "batch_size": args.batch_size,
+        "max_steps": args.max_steps,
+        "spawn_mode": args.spawn_mode,
+        "architecture": args.architecture,
+        "hidden_size": args.hidden_size,
+        "gamma": args.gamma,
+        "gae_lambda": args.gae_lambda,
+        "learning_rate": args.learning_rate,
+        "ppo_epochs": args.ppo_epochs,
+        "preset": args.preset,
+        "clip_epsilon": args.clip_epsilon,
+        "entropy_coef": args.entropy_coef,
+        "value_coef": args.value_coef,
+        "value_clip": args.value_clip,
+        "recurrent_l2_coef": args.recurrent_l2_coef,
+        "grad_clip": args.grad_clip,
+        "sgd_minibatch_size": args.sgd_minibatch_size,
+        "max_seq_len": args.max_seq_len,
+        "kl_coeff": args.kl_coeff,
+        "kl_target": args.kl_target,
+        "learner_mode": args.learner_mode,
+        "rnn_initialization": args.rnn_initialization,
+        "device": args.device,
+        "cuda_tf32": args.cuda_tf32,
+        "subspace_metric_period": args.subspace_metric_period,
+        "triton_env_step": args.triton_env_step,
+        "fused_agent_rollout": args.fused_agent_rollout,
+        "finite_guard": args.finite_guard,
+    }
+
+
+# Payload keys mapped 1:1 onto TrainConfig fields by train_config_from_payload.
+_PAYLOAD_CONFIG_KEYS = (
+    "updates",
+    "batch_size",
+    "architecture",
+    "hidden_size",
+    "gamma",
+    "gae_lambda",
+    "learning_rate",
+    "ppo_epochs",
+    "clip_epsilon",
+    "entropy_coef",
+    "value_coef",
+    "value_clip",
+    "recurrent_l2_coef",
+    "grad_clip",
+    "sgd_minibatch_size",
+    "max_seq_len",
+    "kl_coeff",
+    "kl_target",
+    "learner_mode",
+    "rnn_initialization",
+    "seed",
+    "device",
+    "log_every",
+    "checkpoint_every",
+    "checkpoint_every_seconds",
+    "status_every_seconds",
+    "cost_per_hour",
+    "cuda_tf32",
+    "subspace_metric_period",
+    "triton_env_step",
+    "fused_agent_rollout",
+    "finite_guard",
+    "run_id",
+    "attempt_id",
+)
+_PAYLOAD_PATH_KEYS = ("checkpoint", "run_dir", "resume_from")
+_PAYLOAD_ENV_KEYS = ("task", "max_steps", "spawn_mode")
+# Bookkeeping the orchestrators carry alongside the hyperparameters: the
+# provenance-only preset name plus the launching job's attempt identity.
+_PAYLOAD_IGNORED_KEYS = ("preset", "unit_id", "attempt", "log")
+
+
+def train_config_from_payload(payload: Mapping[str, Any], **overrides: Any) -> TrainConfig:
+    """Rebuild a TrainConfig from a config_payload-style worker payload.
+
+    Unknown payload keys raise ValueError so typos and drifted key sets fail
+    loudly. Keyword overrides must be TrainConfig fields and win over payload
+    values; an ``env`` override replaces the payload-derived environment.
+    """
+    unknown = sorted(
+        set(payload)
+        - set(_PAYLOAD_CONFIG_KEYS)
+        - set(_PAYLOAD_PATH_KEYS)
+        - set(_PAYLOAD_ENV_KEYS)
+        - set(_PAYLOAD_IGNORED_KEYS)
+        - {"experiment"}
+    )
+    if unknown:
+        raise ValueError(f"unknown training payload keys: {', '.join(unknown)}")
+    field_names = {field.name for field in fields(TrainConfig)}
+    unknown_overrides = sorted(set(overrides) - field_names)
+    if unknown_overrides:
+        raise ValueError(f"unknown TrainConfig overrides: {', '.join(unknown_overrides)}")
+
+    kwargs: dict[str, Any] = {key: payload[key] for key in _PAYLOAD_CONFIG_KEYS if key in payload}
+    for key in ("checkpoint", "run_dir"):
+        if key in payload:
+            kwargs[key] = Path(payload[key])
+    if payload.get("resume_from"):
+        kwargs["resume_from"] = Path(payload["resume_from"])
+    if "experiment" in payload:
+        kwargs["experiment_id"] = payload["experiment"]
+    if "env" not in overrides:
+        task = payload["task"]
+        kwargs["env"] = GridWorldConfig(
+            grid_size=10,
+            vision_radius=3,
+            max_steps=payload["max_steps"],
+            task=task,
+            partner_visibility=resolve_partner_visibility(task, None),
+            spawn_mode=payload["spawn_mode"],
+        )
+    kwargs.update(overrides)
+    return TrainConfig(**kwargs)
 
 
 def resolve_partner_visibility(

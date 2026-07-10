@@ -14,7 +14,6 @@ from typing import Any
 
 from safetensors import SafetensorError
 
-from mouse_run_run.env import GridWorldConfig
 from mouse_run_run.health import checkpoint_health
 from mouse_run_run.provenance import (
     append_jsonl,
@@ -24,13 +23,16 @@ from mouse_run_run.provenance import (
     write_json_atomic,
 )
 from mouse_run_run.serialization import read_metadata
-from mouse_run_run.train import TrainConfig, train
-from mouse_run_run.training_config import apply_preset_defaults, resolve_partner_visibility
+from mouse_run_run.train import train
+from mouse_run_run.training_config import (
+    add_training_arguments,
+    apply_preset_defaults,
+    config_payload,
+    train_config_from_payload,
+)
 
 
 DEFAULT_UPDATES = 20_000
-DEFAULT_BATCH_SIZE = 40
-DEFAULT_MAX_STEPS = 100
 
 
 def main() -> None:
@@ -40,57 +42,16 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(parents=[config_parser])
     parser.add_argument("--experiment", default="mouse-run-run-0701")
-    parser.add_argument("--updates", type=int, default=DEFAULT_UPDATES)
+    add_training_arguments(parser, updates=DEFAULT_UPDATES, preset="paper_text", device="cuda")
     parser.add_argument("--seeds", type=int, default=10)
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--tasks", choices=("social", "non_social", "both"), default="both")
     parser.add_argument("--concurrency", type=int, default=6)
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
-    parser.add_argument("--spawn-mode", choices=("full_grid", "official_exclude_last"), default="full_grid")
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--gae-lambda", type=float)
-    parser.add_argument("--ppo-epochs", type=int)
-    parser.add_argument(
-        "--architecture",
-        choices=("rnn", "mlp", "ssm", "transformer"),
-        default="rnn",
-    )
-    parser.add_argument("--hidden-size", type=int, default=256)
-    parser.add_argument("--learning-rate", type=float)
-    parser.add_argument(
-        "--preset",
-        choices=("modern_fast", "paper_text", "official_code"),
-        default="paper_text",
-    )
-    parser.add_argument("--clip-epsilon", type=float)
-    parser.add_argument("--entropy-coef", type=float)
-    parser.add_argument("--value-coef", type=float)
-    parser.add_argument(
-        "--value-clip",
-        type=float,
-        default=None,
-        help="RLlib-style vf_clip_param: per-sample squared value error bound (0 disables).",
-    )
-    parser.add_argument("--recurrent-l2-coef", type=float)
-    parser.add_argument("--grad-clip", type=float)
-    parser.add_argument("--sgd-minibatch-size", type=int)
-    parser.add_argument("--max-seq-len", type=int)
-    parser.add_argument("--kl-coeff", type=float)
-    parser.add_argument("--kl-target", type=float)
-    parser.add_argument("--learner-mode", choices=("full_batch", "rllib_2_2"))
-    parser.add_argument("--rnn-initialization", choices=("modern", "pytorch_default"))
     parser.add_argument("--log-every", type=int, default=500)
     parser.add_argument("--checkpoint-every", type=int, default=1000)
     parser.add_argument("--checkpoint-every-seconds", type=float, default=1800.0)
     parser.add_argument("--status-every-seconds", type=float, default=1800.0)
     parser.add_argument("--cost-per-hour", type=float)
-    parser.add_argument("--device", choices=("auto", "cpu", "mps", "cuda"), default="cuda")
-    parser.add_argument("--cuda-tf32", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--subspace-metric-period", type=int, default=1)
-    parser.add_argument("--triton-env-step", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--fused-agent-rollout", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--finite-guard", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-attempts", type=int, default=2)
     parser.add_argument(
         "--max-total-attempts",
@@ -117,9 +78,8 @@ def main() -> None:
     )
     parser.add_argument("--worker", action="store_true")
     if config_args.config:
-        parser.set_defaults(**_load_config(config_args.config))
+        parser.set_defaults(**_validated_config(parser, _load_config(config_args.config)))
     args = parser.parse_args()
-    _normalize_config_paths(args)
 
     if args.worker:
         _worker()
@@ -134,66 +94,13 @@ def main() -> None:
 
 def _worker() -> None:
     payload = json.loads(os.environ["MRR_WORKER_CONFIG"])
-    task = payload["task"]
-    env = GridWorldConfig(
-        grid_size=10,
-        vision_radius=3,
-        max_steps=payload["max_steps"],
-        task=task,
-        partner_visibility=resolve_partner_visibility(task, None),
-        spawn_mode=payload["spawn_mode"],
-    )
     started = time.perf_counter()
-    metrics = train(
-        TrainConfig(
-            updates=payload["updates"],
-            batch_size=payload["batch_size"],
-            architecture=payload.get("architecture", "rnn"),
-            hidden_size=payload["hidden_size"],
-            gamma=payload["gamma"],
-            gae_lambda=payload["gae_lambda"],
-            learning_rate=payload["learning_rate"],
-            ppo_epochs=payload["ppo_epochs"],
-            clip_epsilon=payload["clip_epsilon"],
-            entropy_coef=payload["entropy_coef"],
-            value_coef=payload["value_coef"],
-            value_clip=payload["value_clip"],
-            recurrent_l2_coef=payload["recurrent_l2_coef"],
-            grad_clip=payload["grad_clip"],
-            sgd_minibatch_size=payload["sgd_minibatch_size"],
-            max_seq_len=payload["max_seq_len"],
-            kl_coeff=payload["kl_coeff"],
-            kl_target=payload["kl_target"],
-            learner_mode=payload["learner_mode"],
-            rnn_initialization=payload["rnn_initialization"],
-            seed=payload["seed"],
-            device=payload["device"],
-            log_every=payload["log_every"],
-            checkpoint=Path(payload["checkpoint"]),
-            checkpoint_every=payload["checkpoint_every"],
-            checkpoint_every_seconds=payload["checkpoint_every_seconds"],
-            run_dir=Path(payload["run_dir"]),
-            status_every_seconds=payload["status_every_seconds"],
-            cost_per_hour=payload["cost_per_hour"],
-            cuda_tf32=payload["cuda_tf32"],
-            subspace_metric_period=payload["subspace_metric_period"],
-            triton_env_step=payload["triton_env_step"],
-            fused_agent_rollout=payload["fused_agent_rollout"],
-            finite_guard=payload["finite_guard"],
-            experiment_id=payload["experiment"],
-            run_id=payload["run_id"],
-            attempt_id=payload["attempt_id"],
-            resume_from=(
-                Path(payload["resume_from"]) if payload.get("resume_from") else None
-            ),
-            env=env,
-        )
-    )
+    metrics = train(train_config_from_payload(payload))
     print(
         "MRR_JOB_RESULT="
         + json.dumps(
             {
-                "task": task,
+                "task": payload["task"],
                 "seed": payload["seed"],
                 "unit_id": payload["unit_id"],
                 "run_id": payload["run_id"],
@@ -404,40 +311,12 @@ class ExperimentRunner:
         payload = {
             **job,
             "experiment": self.args.experiment,
-            "updates": self.args.updates,
-            "batch_size": self.args.batch_size,
-            "max_steps": self.args.max_steps,
-            "spawn_mode": self.args.spawn_mode,
-            "gamma": self.args.gamma,
-            "gae_lambda": self.args.gae_lambda,
-            "ppo_epochs": self.args.ppo_epochs,
-            "architecture": self.args.architecture,
-            "hidden_size": self.args.hidden_size,
-            "learning_rate": self.args.learning_rate,
-            "preset": self.args.preset,
-            "clip_epsilon": self.args.clip_epsilon,
-            "entropy_coef": self.args.entropy_coef,
-            "value_coef": self.args.value_coef,
-            "value_clip": self.args.value_clip,
-            "recurrent_l2_coef": self.args.recurrent_l2_coef,
-            "grad_clip": self.args.grad_clip,
-            "sgd_minibatch_size": self.args.sgd_minibatch_size,
-            "max_seq_len": self.args.max_seq_len,
-            "kl_coeff": self.args.kl_coeff,
-            "kl_target": self.args.kl_target,
-            "learner_mode": self.args.learner_mode,
-            "rnn_initialization": self.args.rnn_initialization,
-            "device": self.args.device,
+            **config_payload(self.args),
             "log_every": self.args.log_every,
             "checkpoint_every": self.args.checkpoint_every,
             "checkpoint_every_seconds": self.args.checkpoint_every_seconds,
             "status_every_seconds": self.args.status_every_seconds,
             "cost_per_hour": self.args.cost_per_hour,
-            "cuda_tf32": self.args.cuda_tf32,
-            "subspace_metric_period": self.args.subspace_metric_period,
-            "triton_env_step": self.args.triton_env_step,
-            "fused_agent_rollout": self.args.fused_agent_rollout,
-            "finite_guard": self.args.finite_guard,
         }
         env = os.environ.copy()
         env["MRR_WORKER_CONFIG"] = json.dumps(payload)
@@ -731,39 +610,11 @@ class ExperimentRunner:
 
     def _config_payload(self) -> dict[str, Any]:
         return {
-            "updates": self.args.updates,
-            "batch_size": self.args.batch_size,
-            "max_steps": self.args.max_steps,
-            "spawn_mode": self.args.spawn_mode,
-            "gamma": self.args.gamma,
-            "gae_lambda": self.args.gae_lambda,
-            "ppo_epochs": self.args.ppo_epochs,
-            "architecture": self.args.architecture,
-            "hidden_size": self.args.hidden_size,
-            "learning_rate": self.args.learning_rate,
-            "preset": self.args.preset,
-            "clip_epsilon": self.args.clip_epsilon,
-            "entropy_coef": self.args.entropy_coef,
-            "value_coef": self.args.value_coef,
-            "value_clip": self.args.value_clip,
-            "recurrent_l2_coef": self.args.recurrent_l2_coef,
-            "grad_clip": self.args.grad_clip,
-            "sgd_minibatch_size": self.args.sgd_minibatch_size,
-            "max_seq_len": self.args.max_seq_len,
-            "kl_coeff": self.args.kl_coeff,
-            "kl_target": self.args.kl_target,
-            "learner_mode": self.args.learner_mode,
-            "rnn_initialization": self.args.rnn_initialization,
+            **config_payload(self.args),
             "checkpoint_every": self.args.checkpoint_every,
             "checkpoint_every_seconds": self.args.checkpoint_every_seconds,
             "status_every_seconds": self.args.status_every_seconds,
             "concurrency": self.args.concurrency,
-            "device": self.args.device,
-            "cuda_tf32": self.args.cuda_tf32,
-            "subspace_metric_period": self.args.subspace_metric_period,
-            "triton_env_step": self.args.triton_env_step,
-            "fused_agent_rollout": self.args.fused_agent_rollout,
-            "finite_guard": self.args.finite_guard,
         }
 
     def _install_signal_handlers(self) -> None:
@@ -858,11 +709,38 @@ def _load_config(path: Path) -> dict[str, Any]:
     return data
 
 
-def _normalize_config_paths(args: argparse.Namespace) -> None:
-    for key in ("experiment_spec", "runs_root"):
-        value = getattr(args, key, None)
-        if value is not None and not isinstance(value, Path):
-            setattr(args, key, Path(value))
+def _validated_config(parser: argparse.ArgumentParser, data: dict[str, Any]) -> dict[str, Any]:
+    """Validate --config values as argparse would: known keys, types, choices."""
+    actions = {action.dest: action for action in parser._actions if action.dest != "help"}
+    unknown = sorted(set(data) - set(actions))
+    if unknown:
+        raise ValueError(f"unknown config keys: {', '.join(unknown)}")
+    validated: dict[str, Any] = {}
+    for key, value in data.items():
+        action = actions[key]
+        if value is not None and action.type is not None:
+            if isinstance(value, str):
+                try:
+                    value = action.type(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"config key {key!r}: cannot parse {value!r} as"
+                        f" {action.type.__name__}"
+                    ) from exc
+            elif action.type is float and isinstance(value, int) and not isinstance(value, bool):
+                value = float(value)
+            elif isinstance(value, bool) or not isinstance(value, action.type):
+                raise ValueError(
+                    f"config key {key!r}: expected {action.type.__name__},"
+                    f" got {type(value).__name__}"
+                )
+        if isinstance(action, argparse.BooleanOptionalAction) and not isinstance(value, bool):
+            raise ValueError(f"config key {key!r}: expected a boolean, got {type(value).__name__}")
+        if action.choices is not None and value not in action.choices:
+            choices = ", ".join(map(repr, action.choices))
+            raise ValueError(f"config key {key!r}: invalid choice {value!r} (choose from {choices})")
+        validated[key] = value
+    return validated
 
 
 def _task_names(raw: str) -> tuple[str, ...]:

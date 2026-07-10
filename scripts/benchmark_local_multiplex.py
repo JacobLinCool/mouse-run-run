@@ -15,74 +15,54 @@ from typing import Any
 import torch
 
 from mouse_run_run.benchmark import parse_positive_ints, steady_timing
-from mouse_run_run.env import GridWorldConfig
 from mouse_run_run.provenance import collect_provenance, write_json_atomic
-from mouse_run_run.train import TrainConfig, train
-from mouse_run_run.training_config import apply_preset_defaults, resolve_partner_visibility
+from mouse_run_run.train import train
+from mouse_run_run.training_config import (
+    add_training_arguments,
+    apply_preset_defaults,
+    config_payload,
+    train_config_from_payload,
+)
 
 
 # [PAPER-METHODS] reportable panel size. Source IDs resolve in the
 # official-dynamics SPEC's "Implementation Source Registry".
 DEFAULT_FULL_JOBS = 20  # 10 social + 10 non-social policy pairs.
 DEFAULT_FULL_UPDATES = 20_000
-DEFAULT_BATCH_SIZE = 40  # 40 complete 100-step episodes = 4,000 env steps/update.
-DEFAULT_MAX_STEPS = 100
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    worker_parser = argparse.ArgumentParser(add_help=False)
+    worker_parser.add_argument("--worker", action="store_true")
+    worker_args, _ = worker_parser.parse_known_args()
+    if worker_args.worker:
+        _worker()
+        return
+
+    parser = argparse.ArgumentParser(parents=[worker_parser])
     # [LOCAL-CALIBRATION] candidate process multiplexing levels; not a paper
     # hyperparameter and not part of the learner-equivalence claim.
     parser.add_argument("--concurrencies", default="1,2,4,8,10")
-    parser.add_argument("--updates", type=int, default=3)
+    add_training_arguments(
+        parser,
+        updates=3,
+        preset=None,
+        device="cuda",
+        devices=("cuda",),
+        architectures=("rnn",),
+        spawn_mode="official_exclude_last",
+        cuda_tf32=False,
+        subspace_metric_period=10,
+        triton_env_step=True,
+        fused_agent_rollout=True,
+    )
     parser.add_argument("--task", choices=("social", "non_social"), default="social")
     parser.add_argument("--seed-start", type=int, default=0)
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
-    parser.add_argument(
-        "--spawn-mode",
-        choices=("full_grid", "official_exclude_last"),
-        default="official_exclude_last",
-    )
-    parser.add_argument("--architecture", choices=("rnn",), default="rnn")
-    parser.add_argument("--hidden-size", type=int, default=256)
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument(
-        "--preset",
-        choices=("modern_fast", "paper_text", "official_code"),
-        required=True,
-    )
-    parser.add_argument("--learning-rate", type=float)
-    parser.add_argument("--gae-lambda", type=float)
-    parser.add_argument("--ppo-epochs", type=int)
-    parser.add_argument("--clip-epsilon", type=float)
-    parser.add_argument("--entropy-coef", type=float)
-    parser.add_argument("--value-coef", type=float)
-    parser.add_argument("--value-clip", type=float)
-    parser.add_argument("--recurrent-l2-coef", type=float)
-    parser.add_argument("--grad-clip", type=float)
-    parser.add_argument("--sgd-minibatch-size", type=int)
-    parser.add_argument("--max-seq-len", type=int)
-    parser.add_argument("--kl-coeff", type=float)
-    parser.add_argument("--kl-target", type=float)
-    parser.add_argument("--learner-mode", choices=("full_batch", "rllib_2_2"))
-    parser.add_argument("--rnn-initialization", choices=("modern", "pytorch_default"))
-    parser.add_argument("--device", choices=("cuda",), default="cuda")
-    parser.add_argument("--cuda-tf32", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--finite-guard", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--subspace-metric-period", type=int, default=10)
-    parser.add_argument("--triton-env-step", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--fused-agent-rollout", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--full-jobs", type=int, default=DEFAULT_FULL_JOBS)
     parser.add_argument("--full-updates", type=int, default=DEFAULT_FULL_UPDATES)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--worker", action="store_true")
     args = parser.parse_args()
     apply_preset_defaults(args)
-
-    if args.worker:
-        _worker()
-        return
     _validate_args(args)
     if args.output.exists():
         raise FileExistsError(f"refusing to overwrite benchmark evidence: {args.output}")
@@ -125,53 +105,16 @@ def main() -> None:
 
 def _worker() -> None:
     payload = json.loads(os.environ["MRR_WORKER_CONFIG"])
-    task = payload["task"]
-    env = GridWorldConfig(
-        grid_size=10,
-        vision_radius=3,
-        max_steps=payload["max_steps"],
-        task=task,
-        partner_visibility=resolve_partner_visibility(task, None),
-        spawn_mode=payload["spawn_mode"],
-    )
     run_dir = Path(payload["run_dir"])
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
     started = perf_counter()
     metrics = train(
-        TrainConfig(
-            updates=payload["updates"],
-            batch_size=payload["batch_size"],
-            architecture=payload["architecture"],
-            hidden_size=payload["hidden_size"],
-            gamma=payload["gamma"],
-            gae_lambda=payload["gae_lambda"],
-            learning_rate=payload["learning_rate"],
-            ppo_epochs=payload["ppo_epochs"],
-            clip_epsilon=payload["clip_epsilon"],
-            entropy_coef=payload["entropy_coef"],
-            value_coef=payload["value_coef"],
-            value_clip=payload["value_clip"],
-            recurrent_l2_coef=payload["recurrent_l2_coef"],
-            grad_clip=payload["grad_clip"],
-            sgd_minibatch_size=payload["sgd_minibatch_size"],
-            max_seq_len=payload["max_seq_len"],
-            kl_coeff=payload["kl_coeff"],
-            kl_target=payload["kl_target"],
-            learner_mode=payload["learner_mode"],
-            rnn_initialization=payload["rnn_initialization"],
-            seed=payload["seed"],
-            device=payload["device"],
+        train_config_from_payload(
+            payload,
             log_every=1,
             checkpoint=run_dir / "checkpoints" / "latest.safetensors",
-            run_dir=run_dir,
             status_every_seconds=3600.0,
-            cuda_tf32=payload["cuda_tf32"],
-            finite_guard=payload["finite_guard"],
-            subspace_metric_period=payload["subspace_metric_period"],
-            triton_env_step=payload["triton_env_step"],
-            fused_agent_rollout=payload["fused_agent_rollout"],
-            env=env,
         )
     )
     timing = steady_timing(run_dir / "metrics.jsonl", payload["updates"])
@@ -220,7 +163,7 @@ def _run_concurrency(
             (
                 seed,
                 subprocess.Popen(
-                    [sys.executable, str(Path(__file__).resolve()), "--worker", "--preset", args.preset, "--output", str(args.output)],
+                    [sys.executable, str(Path(__file__).resolve()), "--worker"],
                     env=env,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -301,38 +244,7 @@ def _run_concurrency(
 
 
 def _benchmark_config(args: argparse.Namespace) -> dict[str, Any]:
-    return {
-        "updates": args.updates,
-        "task": args.task,
-        "batch_size": args.batch_size,
-        "max_steps": args.max_steps,
-        "spawn_mode": args.spawn_mode,
-        "architecture": args.architecture,
-        "hidden_size": args.hidden_size,
-        "gamma": args.gamma,
-        "preset": args.preset,
-        "gae_lambda": args.gae_lambda,
-        "learning_rate": args.learning_rate,
-        "ppo_epochs": args.ppo_epochs,
-        "clip_epsilon": args.clip_epsilon,
-        "entropy_coef": args.entropy_coef,
-        "value_coef": args.value_coef,
-        "value_clip": args.value_clip,
-        "recurrent_l2_coef": args.recurrent_l2_coef,
-        "grad_clip": args.grad_clip,
-        "sgd_minibatch_size": args.sgd_minibatch_size,
-        "max_seq_len": args.max_seq_len,
-        "kl_coeff": args.kl_coeff,
-        "kl_target": args.kl_target,
-        "learner_mode": args.learner_mode,
-        "rnn_initialization": args.rnn_initialization,
-        "device": args.device,
-        "cuda_tf32": args.cuda_tf32,
-        "finite_guard": args.finite_guard,
-        "subspace_metric_period": args.subspace_metric_period,
-        "triton_env_step": args.triton_env_step,
-        "fused_agent_rollout": args.fused_agent_rollout,
-    }
+    return {**config_payload(args), "task": args.task}
 
 
 def _validate_args(args: argparse.Namespace) -> None:
