@@ -1,111 +1,88 @@
 # Onboarding
 
-This guide is for new contributors to the multi-agent reinforcement learning project.
+## Mental model
 
-## Project Idea
+One typed Python `ExperimentDefinition` composes a stable set of named agents,
+one batched environment, an independent policy factory per agent, PPO defaults,
+and an optional replay renderer.  The shared `SimulationEngine` is the only
+agent/environment stepping loop.
 
-The project trains two neural-network agents in a small grid world. At each
-timestep, each agent sees a flattened two-channel map:
+At every timestep each policy performs two distinct operations:
 
-- channel 0 marks the agent's own position;
-- channel 1 marks the other agent's position when visible.
+1. `advance(observation, state)` produces named activations and a candidate
+   next state.
+2. `readout(features)` produces action logits and a value estimate.
 
-The chaser learns to catch the explorer. The explorer learns to avoid the chaser
-and explore new cells. After training, the analysis code studies the hidden
-activations of the two neural networks and asks whether their internal activity
-contains shared structure.
+That boundary makes causal semantics precise.  A `readout` intervention changes
+only operation 2.  A `recurrent` intervention changes the current readout and
+the state carried into the next `advance` call.
 
-## Vocabulary
+## Read in this order
 
-- **Agent**: a program that chooses actions in an environment.
-- **Environment**: the grid world that updates positions and gives rewards.
-- **Observation**: the input vector an agent receives before choosing an action.
-- **Policy**: the neural network that turns an observation into action scores.
-- **Value**: the network's estimate of future reward.
-- **Rollout**: one collected batch of agent-environment interaction.
-- **PPO**: the reinforcement learning update rule used to improve the policies.
-- **Hidden state**: the neural activity vector inside a policy network.
-- **PLSC**: an analysis that finds dimensions shared between the two agents'
-  hidden-state trajectories.
+1. `experiments/chase_grid/experiment.py` — the complete composition.
+2. `experiments/chase_grid/environment.py` and `reward.py` — task semantics.
+3. `experiments/chase_grid/model.py` — architecture and activation sites.
+4. `mouse_run_run/core/simulation.py` — the shared data flow.
+5. `mouse_run_run/training/ppo.py` — the one implemented learner.
+6. `mouse_run_run/artifacts/rollout.py` — exact tensor and table alignment.
+7. `mouse_run_run/analyses/plsc.py` and `interventions.py` — fit, project,
+   inverse-transform, and intervene.
+8. `experiments/zhang_2025_rnn/study.py` — goal-directed development,
+   confirmatory, and protocol-sensitivity settings.
+9. `mouse_run_run/studies/runner.py` — strict stage scheduling and aggregation.
+10. `mouse_run_run/analyses/paper_plsc.py` — Zhang-specific dual-statistic nulls.
 
-## Read The Code In This Order
+## Common changes
 
-1. `mouse_run_run/env.py`
-   Start here to understand the rules of the world: reset, observation
-   creation, movement, collisions, rewards, and visibility.
+### Change the environment
 
-2. `mouse_run_run/policy.py`
-   Read `PolicyBase` and `RNNActorCritic` first. The other architectures are
-   comparison models.
+Edit `ChaseGridConfig` or `ChaseGridEnvironment` in `environment.py`.  Keep all
+agent-indexed outputs keyed by the experiment's `AgentId` tuple and keep world
+state at T+1 alignment.  Update both the renderer and the Triton parity test
+when recorded world semantics change.
 
-3. `mouse_run_run/training_rollout.py`
-   This file answers: "How do we collect one batch of experience from the two
-   agents before learning from it?"
+### Change rewards
 
-4. `mouse_run_run/ppo.py`
-   This file answers: "Given the rollout, how do we compute advantages, losses,
-   gradients, and one optimizer update?"
+Edit only `reward.py`.  `GridReward.compute` receives mutually exclusive event
+masks and returns one reward tensor per agent.
 
-5. `mouse_run_run/train.py`
-   This is the conductor. It wires together the environment, agents, rollout
-   collection, PPO update, metrics, and checkpoint saving.
+### Change the model
 
-6. `mouse_run_run/analysis.py` and `mouse_run_run/plsc.py`
-   Read these after the training loop makes sense. They operate on saved
-   hidden-state tensors rather than controlling training.
+Edit `model.py`.  A policy must implement `initial_state`, `advance`, `readout`,
+`carry_state`, and `evaluate_sequence`.  Declare every recorded/intervenable
+tensor in `activation_sites`.  The included RNN and CNN→RNN models demonstrate
+both flat and convolutional encoders without trainer changes.
 
-## A Tiny Experiment
+### Add an analysis
 
-Run this from the repository root:
+Read a strict `RolloutArtifact`, produce Parquet rows for tabular results, and
+put dense matrices in safetensors.  Analysis must not rerun the policy or
+silently exclude episodes.
 
-```bash
-uv run train-marl \
-  --updates 1 \
-  --batch-size 2 \
-  --max-steps 5 \
-  --hidden-size 8 \
-  --device cpu \
-  --log-every 1 \
-  --checkpoint runs/onboarding-smoke/checkpoints/latest.safetensors
-```
+### Add an intervention
 
-This creates only a tiny checkpoint. It should finish quickly and print one
-metrics line. The important fields are:
+Implement the small `Intervention` protocol or construct a
+`SubspaceIntervention`.  Specify its agents, activation site, and either the
+`readout` or `recurrent` target explicitly.  The simulation engine validates
+the declaration against each policy before stepping.
 
-- `collisions`: average number of chaser-explorer collisions per episode;
-- `chaser_return` and `explorer_return`: average rewards;
-- `vision`: fraction of steps where each agent could see the partner;
-- `loss` and `kl`: PPO training diagnostics.
-
-After that, validate the checkpoint:
+## Required checks
 
 ```bash
-uv run validate-marl-checkpoints runs/onboarding-smoke
+uv run python -m compileall -q mouse_run_run experiments
+uv run pytest
+uv run ruff check
 ```
 
-## How The RL Loop Fits Together
+On a CUDA host, the Triton parity test is mandatory before using
+`--backend triton` for research runs.
 
-The training loop repeats four steps:
+Run the complete CPU readiness fixture with:
 
-1. Reset many grid worlds in parallel.
-2. Ask both policies for actions at every timestep.
-3. Store observations, actions, rewards, old log probabilities, and values.
-4. Run PPO to make the stored actions more likely when they led to better
-   future reward than expected.
+```bash
+uv run mrr study run experiments.zhang_2025_rnn.study:smoke_definition \
+  --output /tmp/mrr-zhang-smoke --device cpu --backend torch --stage all
+```
 
-The important separation is:
-
-- `training_rollout.py` records what happened;
-- `ppo.py` learns from what happened;
-- `train.py` repeats the process and saves evidence.
-
-## What To Change First
-
-Good first tasks:
-
-- add or improve a test for a reward or visibility rule;
-- run a tiny smoke training command and inspect the checkpoint metadata;
-- add a small explanatory comment where the math is not obvious;
-- compare social versus non-social behavior using `evaluate-marl`.
-
-Avoid changing paper-scale configs until the small commands and tests pass.
+Its numerical results are not evidence; behavior, PLSC, and causal gates remain
+`NOT_RUN` by construction.

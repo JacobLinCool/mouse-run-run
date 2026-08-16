@@ -176,7 +176,16 @@ runs-archive/
 
 # Browser automation and generated visual artifacts
 .playwright-cli/
+.playwright-mcp/
 output/
+outputs/
+
+# Standalone generated sites (each is managed as its own repository)
+interactive-report/
+subspace-experiment-site/
+
+# Local scratch scripts and profiling probes
+tmp/
 
 # PyPI configuration file
 .pypirc

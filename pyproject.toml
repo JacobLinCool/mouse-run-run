@@ -1,39 +1,44 @@
 [project]
 name = "mouse-run-run"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "huggingface-hub>=1.21.0",
     "matplotlib>=3.11.0",
     "numpy>=2.5.0",
+    "pyarrow>=21.0.0",
     "safetensors>=0.8.0",
     "scikit-learn>=1.9.0",
     "tensorboard>=2.21.0",
     "torch>=2.12.1",
+    "triton>=3.4.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
 [project.scripts]
-collect-marl-rollouts = "mouse_run_run.rollout_cli:main"
-collect-paper-marl-rollouts = "mouse_run_run.paper_rollout_cli:main"
-evaluate-marl = "mouse_run_run.evaluate_cli:main"
-evaluate-paper-marl = "mouse_run_run.paper_eval_cli:main"
-validate-marl-checkpoints = "mouse_run_run.checkpoint_cli:main"
-train-marl = "mouse_run_run.cli:main"
-upload-marl-artifacts = "mouse_run_run.hf_upload_cli:main"
-visualize-marl = "mouse_run_run.viewer:main"
+mrr = "mouse_run_run.cli:main"
 
 [build-system]
 requires = ["setuptools>=81.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["mouse_run_run*"]
+include = ["mouse_run_run*", "experiments*"]
+namespaces = false
 
 [tool.setuptools.package-data]
-mouse_run_run = ["viewer_static/*.html", "viewer_static/*.json"]
+mouse_run_run = ["replay_static/*.html"]
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
     "ruff>=0.15.20",
+]
+
+[tool.ruff]
+extend-exclude = [
+    ".playwright-mcp",
+    "interactive-report",
+    "outputs",
+    "subspace-experiment-site",
+    "tmp",
 ]

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>MRR Rollout Replay</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0a0d12; --panel:#111722; --edge:#263142; --muted:#8b98aa; --text:#eef3f8; --amber:#ffb84d; --cyan:#52d3e6; --pink:#ff6b91; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:radial-gradient(circle at 20% 0,#172033 0,var(--bg) 42%); color:var(--text); font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; min-height:100vh; }
+    header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:16px; padding:14px 22px; background:#0a0d12e8; border-bottom:1px solid var(--edge); backdrop-filter:blur(12px); }
+    h1 { margin:0; font-size:16px; letter-spacing:.08em; text-transform:uppercase; }
+    .controls { display:flex; align-items:center; gap:9px; flex:1; }
+    button,select,input { color:var(--text); background:#151c29; border:1px solid var(--edge); border-radius:7px; padding:7px 10px; font:inherit; }
+    button:hover { border-color:var(--cyan); cursor:pointer; }
+    input[type=range] { flex:1; padding:0; accent-color:var(--amber); }
+    main { padding:18px; max-width:1500px; margin:auto; }
+    .sources { display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:16px; }
+    .panel { background:linear-gradient(150deg,#151c28,#0e131c); border:1px solid var(--edge); border-radius:12px; padding:15px; box-shadow:0 18px 50px #0005; }
+    .panel h2 { margin:0 0 11px; font-size:13px; color:var(--muted); letter-spacing:.08em; text-transform:uppercase; }
+    .scene { display:grid; grid-template-columns:minmax(250px,1fr) minmax(180px,.65fr); gap:14px; align-items:start; }
+    .grid { width:100%; aspect-ratio:1; background:#090c11; border:1px solid var(--edge); border-radius:8px; }
+    .stats { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+    .stat { padding:8px; background:#0a0f17; border:1px solid #1d2735; border-radius:7px; min-height:54px; }
+    .stat b { display:block; color:var(--muted); font-size:10px; text-transform:uppercase; margin-bottom:4px; }
+    .stat span { color:var(--amber); font-size:13px; overflow-wrap:anywhere; }
+    .badge { display:inline-block; margin:0 5px 7px 0; padding:3px 7px; border:1px solid #41506a; border-radius:999px; color:var(--cyan); font-size:11px; }
+    .neural { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:16px; margin-top:16px; }
+    .heatmap,.pca { width:100%; height:190px; background:#090c11; border:1px solid var(--edge); border-radius:7px; }
+    .caption { color:var(--muted); font-size:11px; margin-top:7px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    #message { color:var(--muted); margin-left:auto; }
+    @media(max-width:700px){ header{flex-wrap:wrap}.controls{order:2;flex-basis:100%}.scene{grid-template-columns:1fr}.sources{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MRR / Saved Rollout</h1>
+    <div class="controls">
+      <button id="play">▶</button><button id="prev">−1</button><button id="next">+1</button>
+      <label>ep <select id="episode"></select></label>
+      <input id="timeline" type="range" min="0" value="0" />
+      <span id="clock">0 / 0</span>
+    </div>
+    <span id="message">loading</span>
+  </header>
+  <main><section id="sources" class="sources"></section><section id="neural" class="neural"></section></main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let meta, payload, t=0, timer=null;
+    async function init(){
+      meta=await (await fetch('/api/meta')).json();
+      for(let i=0;i<meta.episodes;i++) $('episode').append(new Option(String(i),String(i)));
+      $('timeline').max=String(meta.horizon); bind(); await load();
+    }
+    function bind(){
+      $('play').onclick=()=>timer?stop():play(); $('prev').onclick=()=>seek(t-1); $('next').onclick=()=>seek(t+1);
+      $('timeline').oninput=e=>seek(Number(e.target.value)); $('episode').onchange=load;
+      addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();timer?stop():play()} if(e.key==='ArrowLeft')seek(t-1); if(e.key==='ArrowRight')seek(t+1)});
+    }
+    async function load(){ stop(); $('message').textContent='loading episode'; const r=await fetch(`/api/replay?episode=${$('episode').value}`); payload=await r.json(); if(payload.error)throw Error(payload.message); t=0; build(); render(); $('message').textContent=meta.experiment; }
+    function build(){
+      $('sources').replaceChildren(); $('neural').replaceChildren();
+      for(const [key,source] of Object.entries(payload)){ if(!source)continue; const panel=document.createElement('article'); panel.className='panel'; panel.dataset.source=key;
+        panel.innerHTML=`<h2>${key}</h2><div class="badges"></div><div class="scene"><canvas class="grid" width="600" height="600"></canvas><div class="stats"></div></div><div class="caption">${source.rollout}</div>`; $('sources').append(panel);
+        const badges=panel.querySelector('.badges'); const list=source.interventions.length?source.interventions:[{name:'unperturbed',target:'none'}]; for(const item of list){const b=document.createElement('span');b.className='badge';b.textContent=`${item.name} · ${item.target||''}`;badges.append(b)}
+        for(const agent of source.agent_ids){ for(const [site,data] of Object.entries(source.neural[agent])){ if(site.startsWith('raw.')||site.startsWith('readout.'))continue; const card=document.createElement('article');card.className='panel neural-card';card.dataset.source=key;card.dataset.agent=agent;card.dataset.site=site;card.innerHTML=`<h2>${key} / ${agent} / ${site}</h2><canvas class="heatmap" width="720" height="300"></canvas><canvas class="pca" width="720" height="300"></canvas><div class="caption">${data.width} dimensions · cursor-synchronized</div>`;$('neural').append(card)} }
+      }
+    }
+    function render(){ $('timeline').value=String(t); $('clock').textContent=`${t} / ${meta.horizon}`;
+      for(const [key,source] of Object.entries(payload)){ if(!source)continue; const panel=document.querySelector(`[data-source="${key}"]:not(.neural-card)`); drawGrid(panel.querySelector('.grid'),source.frames[t].world); drawStats(panel.querySelector('.stats'),source,t); }
+      document.querySelectorAll('.neural-card').forEach(card=>{const source=payload[card.dataset.source],data=source.neural[card.dataset.agent][card.dataset.site];drawHeat(card.querySelector('.heatmap'),data.values,t);drawPca(card.querySelector('.pca'),data.projection,t)});
+    }
+    function drawGrid(canvas,w){const c=canvas.getContext('2d'),n=w.grid_size,s=canvas.width/n;c.clearRect(0,0,canvas.width,canvas.height);c.strokeStyle='#1c2633';c.lineWidth=1;for(let i=0;i<=n;i++){c.beginPath();c.moveTo(i*s,0);c.lineTo(i*s,canvas.height);c.stroke();c.beginPath();c.moveTo(0,i*s);c.lineTo(canvas.width,i*s);c.stroke()} dot(c,w.chaser,s,'#ff6b91','C');dot(c,w.explorer,s,'#52d3e6','E');}
+    function dot(c,p,s,color,label){c.fillStyle=color;c.beginPath();c.arc((p[1]+.5)*s,(p[0]+.5)*s,s*.28,0,Math.PI*2);c.fill();c.fillStyle='#081018';c.textAlign='center';c.textBaseline='middle';c.font=`bold ${Math.max(11,s*.28)}px monospace`;c.fillText(label,(p[1]+.5)*s,(p[0]+.5)*s)}
+    function drawStats(root,source,index){const f=source.frames[index],tr=f.transition;const rows=[['step',`${index}/${source.horizon}`],['distance',Number(f.world.distance).toFixed(3)],['episode',source.episode],['interventions',source.interventions.map(x=>x.name).join(', ')||'none']];if(tr){for(const [agent,v] of Object.entries(tr.agents)){rows.push([`${agent} action`,v.action]);rows.push([`${agent} reward`,Number(v.reward).toFixed(3)])}const active=Object.entries(tr.events).filter(([,v])=>v===true||Number(v)>0).map(([k])=>k);rows.push(['events',active.join(', ')||'none'])}root.innerHTML=rows.map(([k,v])=>`<div class="stat"><b>${k}</b><span>${v}</span></div>`).join('');}
+    function drawHeat(canvas,values,cursor){const c=canvas.getContext('2d'),T=values.length,H=values[0]?.length||1;c.clearRect(0,0,canvas.width,canvas.height);let max=1e-9;for(const row of values)for(const v of row)max=Math.max(max,Math.abs(v));const image=c.createImageData(canvas.width,canvas.height);for(let y=0;y<canvas.height;y++){const h=Math.min(H-1,Math.floor(y/canvas.height*H));for(let x=0;x<canvas.width;x++){const tt=Math.min(T-1,Math.floor(x/canvas.width*T)),v=values[tt][h]/max,i=(y*canvas.width+x)*4;image.data[i]=v>0?255:20;image.data[i+1]=80+Math.floor(130*(1-Math.abs(v)));image.data[i+2]=v<0?230:40;image.data[i+3]=255}}c.putImageData(image,0,0);c.strokeStyle='#ffb84d';c.lineWidth=3;c.beginPath();c.moveTo(cursor/Math.max(T,1)*canvas.width,0);c.lineTo(cursor/Math.max(T,1)*canvas.width,canvas.height);c.stroke();}
+    function drawPca(canvas,points,cursor){const c=canvas.getContext('2d');c.clearRect(0,0,canvas.width,canvas.height);if(!points.length)return;let xs=points.map(p=>p[0]),ys=points.map(p=>p[1]),xmin=Math.min(...xs),xmax=Math.max(...xs),ymin=Math.min(...ys),ymax=Math.max(...ys);const sx=x=>25+(x-xmin)/(xmax-xmin||1)*(canvas.width-50),sy=y=>canvas.height-25-(y-ymin)/(ymax-ymin||1)*(canvas.height-50);c.strokeStyle='#41506a';c.beginPath();points.forEach((p,i)=>i?c.lineTo(sx(p[0]),sy(p[1])):c.moveTo(sx(p[0]),sy(p[1])));c.stroke();points.forEach((p,i)=>{c.fillStyle=i===Math.min(cursor,points.length-1)?'#ffb84d':'#52d3e688';c.beginPath();c.arc(sx(p[0]),sy(p[1]),i===cursor?6:2,0,Math.PI*2);c.fill()});}
+    function seek(value){t=Math.max(0,Math.min(meta.horizon,value));render();if(t===meta.horizon)stop();}
+    function play(){if(t===meta.horizon)t=0;$('play').textContent='❚❚';timer=setInterval(()=>seek(t+1),180)} function stop(){clearInterval(timer);timer=null;$('play').textContent='▶'}
+    init().catch(e=>$('message').textContent=e.message);
+  </script>
+</body>
+</html>

@@ -1,69 +1,272 @@
+"""Unified command surface for training, rollouts, analyses, and replay."""
+
+from __future__ import annotations
+
 import argparse
+import json
 from pathlib import Path
 
-from mouse_run_run.env import GridWorldConfig
-from mouse_run_run.train import train
-from mouse_run_run.training_config import (
-    add_training_arguments,
-    apply_preset_defaults,
-    config_payload,
-    resolve_partner_visibility,
-    train_config_from_payload,
+from mouse_run_run.analyses.cka import run_linear_cka
+from mouse_run_run.analyses.intervention import compare_rollouts
+from mouse_run_run.analyses.plsc import (
+    FixedRank,
+    PLSCConfig,
+    PermutationThreshold,
+    fit_plsc,
+    load_fitted_plsc,
+    save_fitted_plsc,
 )
+from mouse_run_run.artifacts.rollout import load_rollout
+from mouse_run_run.core.experiment import RuntimeConfig
+from mouse_run_run.core.intervention import InterventionPipeline
+from mouse_run_run.core.types import AgentId
+from mouse_run_run.interventions import SubspaceIntervention
+from mouse_run_run.loading import load_experiment, load_study
+from mouse_run_run.rollouts import collect_experiment_rollout
+from mouse_run_run.training.runner import train_experiment
+from mouse_run_run.studies.runner import plan_study, run_study
+
+
+DEFAULT_EXPERIMENT = "experiments.chase_grid.experiment:definition"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    add_training_arguments(parser, updates=200, preset="modern_fast", device="cpu")
-    parser.add_argument("--grid-size", type=int, default=10)
-    parser.add_argument("--vision-radius", type=int, default=3)
-    parser.add_argument("--task", choices=("social", "non_social"), default="social")
-    parser.add_argument("--partner-visibility", choices=("partial", "none", "full"))
-    parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--log-every", type=int, default=20)
-    parser.add_argument("--checkpoint-every", type=int, default=0)
-    parser.add_argument("--checkpoint-every-seconds", type=float, default=0.0)
-    parser.add_argument("--run-dir", type=Path)
-    parser.add_argument("--metrics-path", type=Path)
-    parser.add_argument("--status-path", type=Path)
-    parser.add_argument("--tensorboard-dir", type=Path)
-    parser.add_argument("--status-every-seconds", type=float, default=300.0)
-    parser.add_argument("--cost-per-hour", type=float)
-    parser.add_argument(
-        "--checkpoint",
-        type=Path,
-        default=Path("runs/marl_ppo.safetensors"),
-    )
-    parser.add_argument(
-        "--resume-from",
-        type=Path,
-        help="Checkpoint with training state to resume from.",
-    )
+    parser = _parser()
     args = parser.parse_args()
-    apply_preset_defaults(args)
+    if args.command == "train":
+        _train(args)
+    elif args.command == "rollout":
+        _rollout(args)
+    elif args.command == "analyze":
+        _analyze(args)
+    elif args.command == "replay":
+        _replay(args)
+    elif args.command == "study":
+        _study(args)
+    else:  # pragma: no cover - argparse guarantees a registered command.
+        raise AssertionError(args.command)
 
-    env = GridWorldConfig(
-        grid_size=args.grid_size,
-        vision_radius=args.vision_radius,
-        max_steps=args.max_steps,
-        task=args.task,
-        partner_visibility=resolve_partner_visibility(args.task, args.partner_visibility),
-        spawn_mode=args.spawn_mode,
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="mrr")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    train = commands.add_parser("train", help="train one typed Python experiment")
+    train.add_argument("experiment", nargs="?", default=DEFAULT_EXPERIMENT)
+    train.add_argument("--run-dir", type=Path, required=True)
+    train.add_argument("--resume-from", type=Path)
+    _runtime_arguments(train, default_batch_size=40)
+    train.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
     )
-    config = train_config_from_payload(
-        config_payload(args),
+
+    rollout = commands.add_parser("rollout", help="collect a saved rollout")
+    rollout.add_argument("checkpoint", type=Path)
+    rollout.add_argument("--experiment", default=DEFAULT_EXPERIMENT)
+    rollout.add_argument("--output", type=Path, required=True)
+    rollout.add_argument("--episodes", type=int, default=128)
+    rollout.add_argument("--horizon", type=int)
+    rollout.add_argument("--deterministic", action="store_true")
+    _runtime_arguments(rollout, default_batch_size=32)
+    rollout.add_argument("--set", dest="overrides", action="append", default=[])
+    rollout.add_argument("--subspace", type=Path)
+    rollout.add_argument("--agent")
+    rollout.add_argument(
+        "--basis",
+        choices=("shared", "top_unique", "random_unique"),
+        default="shared",
+    )
+    rollout.add_argument("--operation", choices=("remove", "keep"), default="remove")
+    rollout.add_argument("--target", choices=("readout", "recurrent"))
+    rollout.add_argument("--intervention-name", default="subspace")
+
+    analyze = commands.add_parser("analyze", help="analyze a saved rollout")
+    analyses = analyze.add_subparsers(dest="analysis", required=True)
+    cka = analyses.add_parser("cka")
+    cka.add_argument("rollout", type=Path)
+    cka.add_argument("--output", type=Path, required=True)
+    cka.add_argument("--site", default="hidden")
+    plsc = analyses.add_parser("plsc")
+    plsc.add_argument("rollout", type=Path)
+    plsc.add_argument("--output", type=Path, required=True)
+    plsc.add_argument("--agent-a", required=True)
+    plsc.add_argument("--agent-b", required=True)
+    plsc.add_argument("--site", default="hidden")
+    selection = plsc.add_mutually_exclusive_group()
+    selection.add_argument("--rank", type=int)
+    selection.add_argument("--threshold", action="store_true")
+    plsc.add_argument("--alpha", type=float, default=0.05)
+    plsc.add_argument("--permutations", type=int, default=200)
+    plsc.add_argument(
+        "--null-model",
+        choices=("time_shuffle", "episode_shuffle", "circular_shift"),
+        default="episode_shuffle",
+    )
+    plsc.add_argument("--seed", type=int, default=0)
+    plsc.add_argument("--min-shift", type=int, default=10)
+    plsc.add_argument("--control-rank", type=int)
+    compare = analyses.add_parser("compare")
+    compare.add_argument("baseline", type=Path)
+    compare.add_argument("disturbed", type=Path)
+    compare.add_argument("--output", type=Path, required=True)
+
+    replay = commands.add_parser("replay", help="view saved rollouts")
+    replay.add_argument("rollout", type=Path)
+    replay.add_argument("--compare", type=Path, action="append", default=[])
+    replay.add_argument("--experiment", default=DEFAULT_EXPERIMENT)
+    replay.add_argument("--host", default="127.0.0.1")
+    replay.add_argument("--port", type=int, default=8765)
+
+    study = commands.add_parser("study", help="plan or run a typed reproduction study")
+    study_commands = study.add_subparsers(dest="study_command", required=True)
+    study_plan = study_commands.add_parser("plan", help="validate and print workload only")
+    study_plan.add_argument("definition")
+    study_run = study_commands.add_parser("run", help="run one or more strict study stages")
+    study_run.add_argument("definition")
+    study_run.add_argument("--output", type=Path, required=True)
+    study_run.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
+    study_run.add_argument("--backend", choices=("torch", "triton"), default="torch")
+    study_run.add_argument("--parallelism", type=int, default=1)
+    study_run.add_argument(
+        "--stage",
+        choices=("train", "behavior", "neural", "causal", "all"),
+        default="all",
+    )
+    study_run.add_argument("--resume", action="store_true")
+    return parser
+
+
+def _runtime_arguments(parser: argparse.ArgumentParser, *, default_batch_size: int) -> None:
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
+    parser.add_argument("--backend", choices=("torch", "triton"), default="torch")
+    parser.add_argument("--batch-size", type=int, default=default_batch_size)
+    parser.add_argument("--seed", type=int, default=0)
+
+
+def _runtime(args: argparse.Namespace) -> RuntimeConfig:
+    return RuntimeConfig(
+        device=args.device,
+        environment_backend=args.backend,
+        batch_size=args.batch_size,
         seed=args.seed,
-        log_every=args.log_every,
-        checkpoint=args.checkpoint,
-        checkpoint_every=args.checkpoint_every,
-        checkpoint_every_seconds=args.checkpoint_every_seconds,
-        run_dir=args.run_dir,
-        metrics_path=args.metrics_path,
-        status_path=args.status_path,
-        tensorboard_dir=args.tensorboard_dir,
-        status_every_seconds=args.status_every_seconds,
-        cost_per_hour=args.cost_per_hour,
-        resume_from=args.resume_from,
-        env=env,
     )
-    train(config)
+
+
+def _train(args: argparse.Namespace) -> None:
+    experiment = load_experiment(args.experiment, args.overrides)
+    result = train_experiment(
+        experiment,
+        runtime=_runtime(args),
+        run_dir=args.run_dir,
+        resume_from=args.resume_from,
+    )
+    print(f"checkpoint={result.checkpoint}")
+
+
+def _rollout(args: argparse.Namespace) -> None:
+    experiment = load_experiment(args.experiment, args.overrides)
+    pipeline = InterventionPipeline()
+    if args.subspace is not None:
+        if args.target is None:
+            raise ValueError("--target is required with --subspace")
+        fitted = load_fitted_plsc(args.subspace)
+        agent_id = fitted.config.agent_a if args.agent is None else AgentId(args.agent)
+        intervention = SubspaceIntervention(
+            name=args.intervention_name,
+            subspace=fitted.subspace(agent_id, args.basis),
+            target=args.target,
+            operation=args.operation,
+        )
+        pipeline = InterventionPipeline((intervention,))
+    elif args.target is not None or args.agent is not None:
+        raise ValueError("subspace intervention options require --subspace")
+    artifact = collect_experiment_rollout(
+        experiment,
+        args.checkpoint,
+        args.output,
+        runtime=_runtime(args),
+        episodes=args.episodes,
+        horizon=args.horizon or experiment.training.horizon,
+        deterministic=args.deterministic,
+        interventions=pipeline,
+    )
+    print(f"rollout={artifact.path}")
+
+
+def _analyze(args: argparse.Namespace) -> None:
+    if args.analysis == "compare":
+        result = compare_rollouts(
+            load_rollout(args.baseline),
+            load_rollout(args.disturbed),
+            args.output,
+        )
+        print(f"analysis={result.output}")
+        return
+    rollout = load_rollout(args.rollout)
+    if args.analysis == "cka":
+        result = run_linear_cka(rollout, args.output, site=args.site)
+        print(f"analysis={result.output}")
+        return
+    if args.rank is not None:
+        selection = FixedRank(args.rank)
+    else:
+        selection = PermutationThreshold(
+            alpha=args.alpha,
+            permutations=args.permutations,
+            null_model=args.null_model,
+            seed=args.seed,
+            min_shift=args.min_shift,
+        )
+    fitted = fit_plsc(
+        rollout,
+        PLSCConfig(
+            agent_a=AgentId(args.agent_a),
+            agent_b=AgentId(args.agent_b),
+            site=args.site,
+            selection=selection,
+            control_rank=args.control_rank,
+            control_seed=args.seed,
+        ),
+    )
+    save_fitted_plsc(args.output, fitted, rollout=rollout.path)
+    print(f"analysis={args.output}")
+
+
+def _replay(args: argparse.Namespace) -> None:
+    from mouse_run_run.replay.server import serve_replay
+
+    experiment = load_experiment(args.experiment)
+    serve_replay(
+        args.rollout,
+        compare=args.compare,
+        experiment=experiment,
+        host=args.host,
+        port=args.port,
+    )
+
+
+def _study(args: argparse.Namespace) -> None:
+    definition = load_study(args.definition)
+    if args.study_command == "plan":
+        print(json.dumps(plan_study(definition), indent=2, sort_keys=True))
+        return
+    result = run_study(
+        args.definition,
+        definition,
+        output=args.output,
+        device=args.device,
+        backend=args.backend,
+        parallelism=args.parallelism,
+        stage=args.stage,
+        resume=args.resume,
+    )
+    print(f"study={result.output}")
+    print(f"report={result.report}")
+
+
+if __name__ == "__main__":
+    main()
