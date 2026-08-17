@@ -3,14 +3,11 @@ name = "mouse-run-run"
 version = "0.2.0"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "huggingface-hub>=1.21.0",
-    "matplotlib>=3.11.0",
-    "numpy>=2.5.0",
     "pyarrow>=21.0.0",
     "safetensors>=0.8.0",
     "scikit-learn>=1.9.0",
     "tensorboard>=2.21.0",
-    "torch>=2.12.1",
+    "torch>=2.13.0",
     "triton>=3.4.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
@@ -18,7 +15,7 @@ dependencies = [
 mrr = "mouse_run_run.cli:main"
 
 [build-system]
-requires = ["setuptools>=81.0.0"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -32,13 +29,4 @@ mouse_run_run = ["replay_static/*.html"]
 dev = [
     "pytest>=9.1.1",
     "ruff>=0.15.20",
-]
-
-[tool.ruff]
-extend-exclude = [
-    ".playwright-mcp",
-    "interactive-report",
-    "outputs",
-    "subspace-experiment-site",
-    "tmp",
 ]

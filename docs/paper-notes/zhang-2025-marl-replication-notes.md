@@ -317,137 +317,24 @@ Control:
 
 ## Current PyTorch Port Status
 
-The repo provides two explicitly separated training regimes. The completed
-`paper_marl_2026` experiments used the original fast full-batch learner through
-the `modern_fast`/`paper_text` presets. The new `official_code` preset preserves
-the vectorized PyTorch environment while reproducing the learning dynamics
-inherited by the released Ray RLlib 2.2 training script.
+The runnable implementation is the strict typed study in
+[`experiments/zhang_2025_rnn`](../../experiments/zhang_2025_rnn). It provides:
 
-Implemented:
+- the paper-aligned chaser–explorer environment and independent recurrent
+  actor-critic policies;
+- explicit formal, behavior-only development, protocol-sensitivity, and tiny
+  CPU smoke definitions;
+- train, behavior, neural, and causal stages through one validated study
+  runner;
+- safetensors checkpoints, Parquet analysis tables, deterministic planning,
+  and strict resume/config validation;
+- direct tests for environment dynamics, PPO math, analysis controls, study
+  planning, artifact validation, and stage execution.
 
-- Paper-style `10 x 10` grid world.
-- `7 x 7` partner vision via `vision_radius = 3`.
-- `200`-dimensional observation.
-- `100`-step episodes by default.
-- Supplementary Table 3 social and non-social rewards.
-- Social and non-social task variants.
-- Partner-visibility modes: `partial`, `none`, `full`.
-- Official action order: up, right, down, left.
-- Sequential movement with chaser moving first.
-- Collision as a blocking event, not an episode terminator.
-- Independent 256-unit recurrent actor-critic policies.
-- Recurrent PPO-style clipped policy updates in current PyTorch.
-- Random-opponent evaluation modes for Fig. 5-style behavioral checks.
-- Rollout export for hidden states, observations, actions, positions, rewards, collision events, approach/escape events, visibility flags, and new-field events.
-- Safetensors checkpoint and rollout artifacts, with config/metrics stored as JSON metadata.
-
-Also implemented (2026-07-02 review round):
-
-- Official event precedence for approach/escape (gated on collision and own new-field).
-- Per-agent collision flags in step results and rollouts.
-- Degenerate-episode exclusion with the interpretation documented above (longest stuck run, collision-blocked steps excluded).
-- Rollout schema v3 time alignment: state series `(max_steps + 1)` aligned to states, `hidden[t]` produced `action[t]`, events describe transition `t -> t+1`; the alignment convention is stored in rollout metadata.
-- Seeded, reproducible evaluation and rollout collection; the randomized agent's policy is never sampled, so the RNG stream is stable.
-- Per-agent gradient clipping (a joint norm would couple the two independent agents).
-- Checkpoint training state (optimizer, RNG, update index) and resume-from-checkpoint.
-- RLlib-style value clipping (`value_clip`, default 10.0 = RLlib 2.2's
-  `vf_clip_param` default, which the official code inherited). Empirically
-  necessary: on a 4070 Ti Super, per-agent clipping made `modern_fast`
-  (recurrent L2 = 0) learn fast enough that the bootstrapped value targets
-  chased diverging predictions from ~update 60 into overflow by ~update 190
-  (seed 0); `paper_text` (L2 = 0.3) was stable over 200 updates, but 20,000
-  updates would enter the same fast-learning regime, so the reference clamp
-  is applied everywhere.
-- Fused agent rollout (`fused_agent_rollout`, on in the primary config): both
-  agents' rollout forwards run as one stacked batch (gather + bmm). Bit-exact
-  against the unfused path on CPU fp32 over a full 100-step recurrent horizon;
-  on CUDA with TF32 the reduction order differs, so trajectories are not
-  bit-identical (no run is bit-reproducible on CUDA anyway — cuDNN, TF32).
-  Action sampling stays per-agent to preserve the RNG stream layout.
-- Rollout-time finite guarding relies on the post-rollout validation of stored
-  log-probs/values/advantages/returns (still before any optimizer step); even
-  a sync-free per-step accumulated flag cost ~24% of rollout wall time in
-  kernel launches, and non-finite values necessarily propagate into the
-  validated tensors.
-
-Official-dynamics learner implemented (2026-07-10):
-
-- Separate explorer and chaser parameters, Adam optimizers, optimizer moments,
-  and adaptive KL coefficients, with the official explorer-first policy order.
-- RLlib 2.2 PPO defaults inherited by the released script: learning rate
-  `5e-5`, GAE lambda `1.0`, 30 epochs, exact categorical KL penalty and target,
-  zero entropy bonus, no gradient clipping, and PyTorch-default initialization.
-- Recurrent `max_seq_len=20` batching and Ray 2.2's released 33-minibatch
-  slicing behavior, including the eight-step boundary overlap.
-- Exact resume of both policies, both optimizer states, adaptive KL state, and
-  action/minibatch/CUDA RNG state.
-- `official_exclude_last` spawn mode for the released code's `0..8` initial
-  coordinate range, while `full_grid` remains the declared paper-text/modern
-  regime.
-- CUDA Triton/reference environment equivalence, a healthy five-update
-  calibration, and zero-failure 10-worker capacity calibration are recorded in
-  `experiments/paper_marl_official_dynamics_2026/RUNS.md`.
-
-Remaining gaps:
-
-- The new official-dynamics path is algorithmically aligned, not a bit-for-bit
-  recreation of Ray's five worker processes. Vectorized collection, random
-  number interleaving, and the newer PyTorch/CUDA kernels can produce different
-  trajectories.
-- The official-dynamics path has passed smoke and CUDA calibration, but has not
-  yet trained the declared ten independent social and ten non-social pairs.
-  Consequently, the completed `paper_marl_2026` results must remain labeled as
-  the earlier fast-learner reproduction until the new panel finishes.
-- PLSC shared-dimension extraction with temporal-permutation significance is
-  implemented in `mouse_run_run/plsc.py` (the reusable core) and consumed by
-  both `scripts/analysis/analyze_shared_neural.py` (offline: z-scored hidden
-  states, cross-covariance SVD, per-rank permutation null, significant-dimension
-  count and top-dimension correlation, aggregated social vs non_social, C3) and
-  the interactive viewer's "Shared & Unique Subspace" panel (pools self-play
-  episodes for a checkpoint, shows the cross-covariance → SVD → shared/unique
-  split as a numbered pipeline, the spectrum vs null, the variance split, and a
-  pooled episode's shared/unique norm over time; it warns when the pool is
-  rank-deficient). Not yet implemented: SVM balanced-accuracy decoding,
-  neural-action-space partner-representation GLMs, and null-space perturbation
-  (C4/C5). `analyze_neural.py` and the Network Activity panel provide
-  single-network diagnostics (PCA, rasters, event-triggered speed, visibility
-  tuning), which are exploratory rather than a reproduction of the paper's
-  cross-agent analyses.
-- The L2 regularization discrepancy between paper text (`lambda = 0.3`) and
-  official code/demo params (`3.0`) cannot be resolved from the released
-  materials. The new experiment therefore pre-declares separate
-  `methods_text_l2` and `official_code_l2` sensitivity panels; both use the
-  official unsquared recurrent-weight norm.
-
-Recent smoke result:
-
-- An earlier 20-update run was used as a systems check, not as a converged model.
-- 128 stochastic self-play evaluation episodes produced about `1.60` collisions per episode.
-- 128 stochastic random-explorer evaluation episodes produced about `1.88` collisions per episode.
-- New checkpoints and rollout files should use `.safetensors`; a smoke checkpoint at `runs/safetensors-smoke.safetensors` and rollout at `runs/safetensors-rollout-smoke.safetensors` verified the format.
-
-## Recommended Reproduction Plan
-
-1. Validate modern env semantics against selected traces from the official environment.
-
-2. Run training at meaningful scale.
-   - one social pair and one non-social pair;
-   - then ten-seed social/non-social runs;
-   - evaluate each checkpoint against random opponents.
-
-3. Implement analysis modules.
-   - SVM balanced-accuracy decoding;
-   - PLSC shared dimension extraction and temporal permutation significance —
-     done (`scripts/analysis/analyze_shared_neural.py`);
-   - neural-action-space partner representation;
-   - null-space perturbation of top 10 PLSCs;
-   - random-PC perturbation control.
-
-4. Validate in stages.
-   - random-agent baseline;
-   - Fig. 5 behavioral metrics;
-   - Fig. 6 neural metrics;
-   - perturbation controls.
+Operational commands and current workload definitions live in the study
+[`README`](../../experiments/zhang_2025_rnn/README.md). Historical v1 runners,
+JSON experiment configs, and artifact readers are available in Git history
+only; the active runtime has no compatibility or fallback path for them.
 
 ## Sources
 

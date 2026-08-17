@@ -6,9 +6,9 @@ agents, records time-aligned internal activations, fits shared subspaces such as
 PLSC, applies causal interventions at readout or recurrent-state boundaries,
 and replays baseline and disturbed behavior side by side.
 
-The active runtime is the strict **mrr-v2** architecture.  Historical paper
-specs and old run directories are retained as an archive; v2 deliberately does
-not guess or load their schemas.
+The active runtime is the strict **mrr-v2** architecture. Historical runtime
+specs are available in Git history; the working tree contains only executable
+v2 definitions and deliberately does not guess or load earlier schemas.
 
 ## Setup
 
