@@ -60,7 +60,8 @@ class CausalRecipe:
     horizon: int
     batch_size: int
     shared_rank: int
-    random_control_rank: int
+    random_control_max_rank: int
+    """Upper bound on the control subspace; its rank is matched on removed variance."""
 
 
 @dataclass(frozen=True)
@@ -251,7 +252,7 @@ class StudyDefinition:
                 raise ValueError("study rollout recipes require positive sizes")
         if self.neural.plsc.min_shift * 2 >= self.neural.horizon:
             raise ValueError("neural horizon must exceed twice the PLSC minimum shift")
-        if self.causal.shared_rank + self.causal.random_control_rank > self.hidden_size:
+        if self.causal.shared_rank + self.causal.random_control_max_rank > self.hidden_size:
             raise ValueError("causal shared and control ranks must fit hidden width")
         if self.neural.non_social_visibility_controls != ("none", "partial", "full"):
             raise ValueError("non-social controls must be none, partial, full")

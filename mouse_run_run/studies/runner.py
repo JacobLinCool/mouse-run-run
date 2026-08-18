@@ -27,6 +27,7 @@ from mouse_run_run.analyses.paper_plsc import (
     removed_variance_fraction,
     save_paper_plsc,
     temporally_shifted_random_pc_basis,
+    variance_matched_rank,
 )
 from mouse_run_run.analyses.plsc import StandardizedSubspace
 from mouse_run_run.artifacts.checkpoint import load_checkpoint
@@ -536,14 +537,31 @@ def _run_causal_unit(
     fit_rollout = load_rollout(fit_root / "rollout")
     fitted = load_paper_plsc(fit_root / "plsc")
     shared = fitted.subspace(CHASER, rank=definition.causal.shared_rank)
-    control_basis = temporally_shifted_random_pc_basis(
+    hidden = fit_rollout.trajectory.agents[CHASER].activations["hidden"][
+        fitted.sample_mask
+    ]
+    shared_variance = removed_variance_fraction(hidden, shared)
+    candidate_basis = temporally_shifted_random_pc_basis(
         fitted,
         fit_rollout,
         agent_id=CHASER,
         shared_rank=definition.causal.shared_rank,
-        control_rank=definition.causal.random_control_rank,
+        control_rank=definition.causal.random_control_max_rank,
         seed=unit.seed + 90_000,
     )
+    candidate_control = StandardizedSubspace(
+        agent_id=CHASER,
+        site="hidden",
+        mean=fitted.means[CHASER],
+        scale=fitted.scales[CHASER],
+        basis=candidate_basis,
+    )
+    # The control only isolates the shared subspace when it costs the agent a
+    # comparable amount of variance, so its rank is derived rather than fixed.
+    control_rank = variance_matched_rank(
+        hidden, candidate_control, target=shared_variance
+    )
+    control_basis = candidate_basis[:, :control_rank].contiguous()
     random_control = StandardizedSubspace(
         agent_id=CHASER,
         site="hidden",
@@ -551,13 +569,15 @@ def _run_causal_unit(
         scale=fitted.scales[CHASER],
         basis=control_basis,
     )
-    hidden = fit_rollout.trajectory.agents[CHASER].activations["hidden"][
-        fitted.sample_mask
-    ]
     variance = {
-        "shared_readout": removed_variance_fraction(hidden, shared),
+        "shared_readout": shared_variance,
         "shifted_random_pc_readout": removed_variance_fraction(hidden, random_control),
-        "shared_recurrent": removed_variance_fraction(hidden, shared),
+        "shared_recurrent": shared_variance,
+    }
+    ranks = {
+        "shared_readout": definition.causal.shared_rank,
+        "shifted_random_pc_readout": control_rank,
+        "shared_recurrent": definition.causal.shared_rank,
     }
     root.mkdir(parents=True, exist_ok=True)
     control_path = root / "control_basis.safetensors"
@@ -656,6 +676,7 @@ def _run_causal_unit(
                         "baseline": baseline,
                         "paired_delta": value - baseline,
                         "removed_variance": 0.0 if condition == "baseline" else variance[condition],
+                        "removed_rank": 0 if condition == "baseline" else ranks[condition],
                     }
                 )
     _write_table(result_path, rows, "mrr-zhang-2025-causal-v1")
