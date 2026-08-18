@@ -8,11 +8,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
-from sklearn.metrics import balanced_accuracy_score
 from sklearn.model_selection import StratifiedGroupKFold
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import LinearSVC
 
 from mouse_run_run.analyses import linear_svm
 from mouse_run_run.artifacts.rollout import RolloutArtifact
@@ -29,14 +25,10 @@ class DecoderConfig:
     shuffled_controls: int = 200
     seed: int = 0
     site: str = "hidden"
-    solver: str = "batched"
-    """``batched`` solves every label set at once; ``sklearn`` fits them one by one."""
 
     def validate(self) -> None:
         if self.folds < 2 or self.shuffled_controls < 1:
             raise ValueError("decoder folds and shuffled controls must be positive")
-        if self.solver not in ("batched", "sklearn"):
-            raise ValueError("decoder solver must be batched or sklearn")
 
 
 def run_diagnostic_decoder(
@@ -146,11 +138,7 @@ def _decode_one(
             for _ in range(config.shuffled_controls)
         ]
     )
-    scores = (
-        _sklearn_scores(values, label_sets, splits)
-        if config.solver == "sklearn"
-        else _batched_scores(values, label_sets, splits)
-    )
+    scores = _batched_scores(values, label_sets, splits)
     observed = float(scores[0])
     null = scores[1:].double()
     p_value = float((1 + (null >= observed).sum()) / (config.shuffled_controls + 1))
@@ -168,7 +156,6 @@ def _decode_one(
         "shuffle_p_value": p_value,
         "folds": config.folds,
         "shuffled_controls": config.shuffled_controls,
-        "solver": config.solver,
     }
 
 
@@ -204,35 +191,6 @@ def _batched_scores(
     return torch.where(degenerate, torch.full_like(scores, 0.5), scores)
 
 
-def _sklearn_scores(
-    values: torch.Tensor,
-    label_sets: torch.Tensor,
-    splits: list[tuple[torch.Tensor, torch.Tensor]],
-) -> torch.Tensor:
-    return torch.tensor(
-        [_cross_validated_score(values, labels, splits) for labels in label_sets],
-        dtype=torch.float64,
-    )
-
-
-def _cross_validated_score(
-    values: torch.Tensor,
-    labels: torch.Tensor,
-    splits: list[tuple[torch.Tensor, torch.Tensor]],
-) -> float:
-    predictions = torch.empty_like(labels)
-    for train, test in splits:
-        if torch.unique(labels[train]).numel() < 2:
-            return 0.5
-        model = make_pipeline(
-            StandardScaler(),
-            LinearSVC(class_weight="balanced", dual="auto", random_state=0),
-        )
-        model.fit(values[train].numpy(), labels[train].numpy())
-        predictions[test] = torch.from_numpy(model.predict(values[test].numpy()))
-    return float(balanced_accuracy_score(labels.numpy(), predictions.numpy()))
-
-
 def _targets(agent_id: AgentId) -> dict[str, str]:
     if str(agent_id) == "chaser":
         return {"collision": "collision", "partner_escape": "explorer_escape"}
@@ -264,7 +222,6 @@ def _insufficient_row(
         "shuffle_p_value": None,
         "folds": None,
         "shuffled_controls": None,
-        "solver": None,
     }
 
 

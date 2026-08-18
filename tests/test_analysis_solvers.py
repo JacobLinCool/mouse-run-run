@@ -3,8 +3,13 @@ from __future__ import annotations
 import pytest
 import torch
 
+from sklearn.metrics import balanced_accuracy_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import LinearSVC
+
 from mouse_run_run.analyses import linear_svm
-from mouse_run_run.analyses.decoder import _batched_scores, _sklearn_scores
+from mouse_run_run.analyses.decoder import _batched_scores
 from mouse_run_run.analyses.paper_plsc import PaperPLSCConfig, _circular_shift_null
 from mouse_run_run.core.progress import ProgressSink, ProgressTracker
 
@@ -84,6 +89,26 @@ def test_plsc_null_is_reproducible_from_the_seed() -> None:
     assert torch.equal(first, second)
 
 
+def _per_fit_score(
+    values: torch.Tensor,
+    labels: torch.Tensor,
+    splits: list[tuple[torch.Tensor, torch.Tensor]],
+) -> float:
+    """One scikit-learn fit per fold, the estimator the batched solver replaces."""
+
+    predictions = torch.empty_like(labels)
+    for train, test in splits:
+        if torch.unique(labels[train]).numel() < 2:
+            return 0.5
+        model = make_pipeline(
+            StandardScaler(),
+            LinearSVC(class_weight="balanced", dual="auto", random_state=0),
+        )
+        model.fit(values[train].numpy(), labels[train].numpy())
+        predictions[test] = torch.from_numpy(model.predict(values[test].numpy()))
+    return float(balanced_accuracy_score(labels.numpy(), predictions.numpy()))
+
+
 def test_batched_decoder_matches_the_per_fit_solver() -> None:
     generator = torch.Generator().manual_seed(4)
     samples, width = 240, 6
@@ -102,7 +127,10 @@ def test_batched_decoder_matches_the_per_fit_solver() -> None:
         for index in range(4)
     ]
     batched = _batched_scores(values, label_sets, folds)
-    reference = _sklearn_scores(values, label_sets, folds)
+    reference = torch.tensor(
+        [_per_fit_score(values, labels, folds) for labels in label_sets],
+        dtype=torch.float64,
+    )
     assert batched[0] > 0.7
     assert torch.allclose(batched, reference, atol=0.02)
 
