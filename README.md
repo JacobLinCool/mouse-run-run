@@ -232,6 +232,21 @@ Torch permutation null as the PLSC and decoder analyses; with `n` seeds per
 group the smallest reachable p-value is fixed by the number of distinct splits,
 so small sweeps report `ns` by construction.
 
+Figure 6 needs two derived tables first, both built from artifacts the study
+already wrote:
+
+```bash
+uv run mrr figures variance runs/zhang-2025-rnn-confirmatory   # panels l-n
+uv run mrr figures sweep runs/zhang-2025-rnn-confirmatory      # panels p-r
+uv run mrr figures fig6 runs/zhang-2025-rnn-confirmatory \
+  --output runs/zhang-2025-rnn-confirmatory/figures
+```
+
+`variance` regresses grouped behavioural predictors onto neural activity and
+reports what the partner explains beyond the agent itself; `sweep` repeats that
+measurement in the action-readout subspace at every training checkpoint. Panel o
+is animal data and is drawn as an explicit gap.
+
 `--box-checkpoint` selects the checkpoint the box plots summarize, and
 `--early-checkpoint` / `--late-checkpoint` select the two stages compared by the
 flow field, polar plot, and angle histogram; each defaults to the extremes of

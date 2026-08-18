@@ -142,6 +142,29 @@ def _parser() -> argparse.ArgumentParser:
 
     figures = commands.add_parser("figures", help="render paper figures from study artifacts")
     figure_commands = figures.add_subparsers(dest="figure", required=True)
+    sweep = figure_commands.add_parser(
+        "sweep", help="measure partner representation at every training checkpoint"
+    )
+    sweep.add_argument("study_output", type=Path)
+    sweep.add_argument("--episodes", type=int, default=10)
+    sweep.add_argument("--horizon", type=int, default=500)
+    sweep.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="cpu")
+    sweep.add_argument("--backend", choices=("torch", "triton"), default="torch")
+
+    variance = figure_commands.add_parser(
+        "variance", help="partner variance from the stored neural rollouts"
+    )
+    variance.add_argument("study_output", type=Path)
+
+    fig6 = figure_commands.add_parser("fig6", help="Zhang et al. (2025) Figure 6")
+    fig6.add_argument("study_output", type=Path)
+    fig6.add_argument("--output", type=Path, required=True)
+    fig6.add_argument("--permutations", type=int, default=10_000)
+    fig6.add_argument("--seed", type=int, default=0)
+    fig6.add_argument(
+        "--format", dest="formats", action="append", choices=("png", "svg", "pdf"), default=[]
+    )
+
     fig5 = figure_commands.add_parser("fig5", help="Zhang et al. (2025) Figure 5")
     fig5.add_argument("study_output", type=Path)
     fig5.add_argument("--output", type=Path, required=True)
@@ -278,6 +301,43 @@ def _figures(args: argparse.Namespace) -> None:
     # command.
     from mouse_run_run.figures.fig5 import Fig5Config, render_fig5
 
+    if args.figure == "sweep":
+        from mouse_run_run.figures.sweep import SweepConfig, collect_partner_representation
+
+        path = collect_partner_representation(
+            args.study_output,
+            config=SweepConfig(
+                episodes=args.episodes,
+                horizon=args.horizon,
+                device=args.device,
+                backend=args.backend,
+            ),
+        )
+        print(f"table={path}")
+        return
+    if args.figure == "variance":
+        from mouse_run_run.figures.sweep import collect_partner_variance
+
+        print(f"table={collect_partner_variance(args.study_output)}")
+        return
+    if args.figure == "fig6":
+        from mouse_run_run.figures.fig6 import Fig6Config, render_fig6
+
+        result = render_fig6(
+            args.study_output,
+            args.output,
+            config=Fig6Config(
+                permutations=args.permutations,
+                seed=args.seed,
+                formats=tuple(args.formats) or ("png", "svg"),
+            ),
+        )
+        for path in result.figure:
+            print(f"figure={path}")
+        print(f"manifest={result.manifest}")
+        for note in result.notes:
+            print(f"note: {note}")
+        return
     if args.figure != "fig5":  # pragma: no cover - argparse guarantees the name.
         raise AssertionError(args.figure)
     config = Fig5Config(

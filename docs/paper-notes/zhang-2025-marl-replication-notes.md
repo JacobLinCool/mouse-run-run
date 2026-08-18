@@ -223,6 +223,16 @@ Two consequences:
   environment steps per epoch from 40 complete episodes", which corroborates
   that the batch settings were left at their defaults rather than tuned.
 
+### Recurrent weights do not survive training (read 2026-08-19)
+
+The recurrent penalty is an unsquared Frobenius norm on `weight_hh` (released
+`simple_rnn_v2_3_2.py:132`, ours `chase_grid/model.py:141`), so its gradient
+pulls with constant magnitude no matter how small the matrix gets. Every
+released checkpoint ends with `||W_hh||` between 0.006 and 0.024 against an
+initialisation of 9.2, and our twenty confirmatory units land at 0.017-0.137, so
+the trained agents in both are effectively feedforward maps of the current
+observation — which bears on how any "shared dynamics" result should be read.
+
 Open implementation questions:
 
 - Paper says L2 `lambda = 0.3`, while official code defaults and demo params show `3.0`. The released `params.json` confirms the trained demo models used `3.0`; our study uses the paper's `0.3`. We should resolve this before claiming exact reproduction.
