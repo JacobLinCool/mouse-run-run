@@ -14,6 +14,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
+from mouse_run_run.analyses import linear_svm
 from mouse_run_run.artifacts.rollout import RolloutArtifact
 from mouse_run_run.core.progress import ProgressSink, ProgressTracker, TerminalProgress
 from mouse_run_run.core.types import AgentId
@@ -28,10 +29,14 @@ class DecoderConfig:
     shuffled_controls: int = 200
     seed: int = 0
     site: str = "hidden"
+    solver: str = "batched"
+    """``batched`` solves every label set at once; ``sklearn`` fits them one by one."""
 
     def validate(self) -> None:
         if self.folds < 2 or self.shuffled_controls < 1:
             raise ValueError("decoder folds and shuffled controls must be positive")
+        if self.solver not in ("batched", "sklearn"):
+            raise ValueError("decoder solver must be batched or sklearn")
 
 
 def run_diagnostic_decoder(
@@ -133,13 +138,21 @@ def _decode_one(
         folds=config.folds,
         seed=config.seed,
     )
-    observed = _cross_validated_score(values, binary, splits)
     generator = torch.Generator().manual_seed(config.seed)
-    controls = []
-    for _ in range(config.shuffled_controls):
-        shuffled = binary[torch.randperm(binary.numel(), generator=generator)]
-        controls.append(_cross_validated_score(values, shuffled, splits))
-    null = torch.tensor(controls, dtype=torch.float64)
+    label_sets = torch.stack(
+        [binary]
+        + [
+            binary[torch.randperm(binary.numel(), generator=generator)]
+            for _ in range(config.shuffled_controls)
+        ]
+    )
+    scores = (
+        _sklearn_scores(values, label_sets, splits)
+        if config.solver == "sklearn"
+        else _batched_scores(values, label_sets, splits)
+    )
+    observed = float(scores[0])
+    null = scores[1:].double()
     p_value = float((1 + (null >= observed).sum()) / (config.shuffled_controls + 1))
     return {
         "agent": str(agent_id),
@@ -155,7 +168,51 @@ def _decode_one(
         "shuffle_p_value": p_value,
         "folds": config.folds,
         "shuffled_controls": config.shuffled_controls,
+        "solver": config.solver,
     }
+
+
+def _batched_scores(
+    values: torch.Tensor,
+    label_sets: torch.Tensor,
+    splits: list[tuple[torch.Tensor, torch.Tensor]],
+) -> torch.Tensor:
+    """Cross-validated balanced accuracy for every label set in one pass.
+
+    The folds and the design matrix are shared, so each fold fits all label sets
+    together instead of repeating the same standardisation and factorisation per
+    shuffle.
+    """
+
+    features = values.double()
+    predictions = torch.empty_like(label_sets)
+    degenerate = torch.zeros(label_sets.shape[0], dtype=torch.bool)
+    for train, test in splits:
+        train_labels = label_sets[:, train]
+        degenerate |= train_labels.amin(dim=1) == train_labels.amax(dim=1)
+        train_features, test_features = linear_svm.standardize(
+            features[train], features[test]
+        )
+        train_features = linear_svm.with_intercept(train_features)
+        test_features = linear_svm.with_intercept(test_features)
+        weights = linear_svm.balanced_weights(train_labels, 1.0)
+        coefficients = linear_svm.fit_squared_hinge(train_features, train_labels, weights)
+        predictions[:, test] = linear_svm.predict(test_features, coefficients)
+    scores = linear_svm.balanced_accuracy(label_sets, predictions).double()
+    # A fold whose training half holds one class cannot be fitted; the score for
+    # that label set is chance, exactly as the per-fit path reported.
+    return torch.where(degenerate, torch.full_like(scores, 0.5), scores)
+
+
+def _sklearn_scores(
+    values: torch.Tensor,
+    label_sets: torch.Tensor,
+    splits: list[tuple[torch.Tensor, torch.Tensor]],
+) -> torch.Tensor:
+    return torch.tensor(
+        [_cross_validated_score(values, labels, splits) for labels in label_sets],
+        dtype=torch.float64,
+    )
 
 
 def _cross_validated_score(
@@ -207,6 +264,7 @@ def _insufficient_row(
         "shuffle_p_value": None,
         "folds": None,
         "shuffled_controls": None,
+        "solver": None,
     }
 
 

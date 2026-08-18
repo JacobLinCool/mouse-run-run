@@ -46,13 +46,14 @@ released pairing intact.
 
 ## Cost
 
-Training is the cheap stage: 20 units of 4,500 updates finish in about 11
-minutes on an 18-core CPU with `OMP_NUM_THREADS=1 --parallelism 20`, and the
-behavior and causal stages take about a minute each. The neural stage is
-dominated by the diagnostic decoder, which costs roughly 20 minutes per
-visibility per unit at the declared 200 shuffled controls; it never feeds a
-gate, so its `shuffled_controls` is the knob to turn when the stage has to fit
-a time budget.
+Measured on an 18-core CPU. Training is the cheap stage: 20 units of 4,500
+updates finish in about 11 minutes with `OMP_NUM_THREADS=1 --parallelism 20`,
+and the behavior and causal stages take about a minute each. In the neural
+stage, one PLSC fit at 2,000 permutations costs about 22 seconds and the
+diagnostic decoder about 72 seconds per visibility per unit at the declared 200
+shuffled controls. Both stages solve their permutation families in one pass
+rather than one fit at a time, which is what keeps the declared control counts
+affordable; the decoder alone was 55 minutes per unit before that change.
 
 ## Development checkpoint selection
 

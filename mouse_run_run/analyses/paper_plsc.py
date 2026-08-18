@@ -33,6 +33,7 @@ class PaperPLSCConfig:
     seed: int = 0
     null_batch_size: int = 4
     compute_device: str = "cpu"
+    null_algorithm: str = "auto"
 
     def validate(self, horizon: int) -> None:
         if self.agent_a == self.agent_b:
@@ -47,6 +48,8 @@ class PaperPLSCConfig:
             raise ValueError("paper PLSC compute_device must be cpu or cuda")
         if self.compute_device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("paper PLSC requested CUDA but CUDA is unavailable")
+        if self.null_algorithm not in ("auto", "fft", "direct"):
+            raise ValueError("paper PLSC null_algorithm must be auto, fft, or direct")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -59,6 +62,7 @@ class PaperPLSCConfig:
             "seed": self.seed,
             "null_batch_size": self.null_batch_size,
             "compute_device": self.compute_device,
+            "null_algorithm": self.null_algorithm,
         }
 
 
@@ -346,6 +350,7 @@ def load_paper_plsc(path: Path) -> PaperPLSCResult:
         seed=int(payload["seed"]),
         null_batch_size=int(payload["null_batch_size"]),
         compute_device=payload["compute_device"],
+        null_algorithm=payload.get("null_algorithm", "direct"),
     )
     agents = (config.agent_a, config.agent_b)
     return PaperPLSCResult(
@@ -379,27 +384,227 @@ def _circular_shift_null(
     tracker: ProgressTracker,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     left, _, _ = _standardize(left_series[sample_mask])
-    rank = min(left.shape[1], right_series.shape[2])
-    covariance = torch.empty(
-        config.permutations,
-        rank,
-        dtype=torch.float64,
-        device=left.device,
+    shifts = _draw_shifts(
+        permutations=config.permutations,
+        time=right_series.shape[0],
+        episode_mask=episode_mask,
+        min_shift=config.min_shift,
+        seed=config.seed,
     )
+    if _covers_whole_episodes(sample_mask, episode_mask):
+        return _whole_episode_null(left, right_series, episode_mask, shifts, config, tracker)
+    return _masked_null(left, right_series, sample_mask, episode_mask, shifts, config, tracker)
+
+
+def _draw_shifts(
+    *,
+    permutations: int,
+    time: int,
+    episode_mask: torch.Tensor,
+    min_shift: int,
+    seed: int,
+) -> torch.Tensor:
+    """Per-permutation, per-episode circular shifts, drawn in one pass.
+
+    The draw order matches one shift per included episode per permutation, so a
+    given seed produces the same null whichever assembly path runs.
+    """
+
+    included = torch.nonzero(episode_mask, as_tuple=False).flatten()
+    generator = torch.Generator().manual_seed(seed)
+    return torch.randint(
+        min_shift,
+        time - min_shift + 1,
+        (permutations, int(included.numel())),
+        generator=generator,
+    )
+
+
+def _covers_whole_episodes(sample_mask: torch.Tensor, episode_mask: torch.Tensor) -> bool:
+    """True when the analysis keeps every timestep of every included episode.
+
+    Only then is a circular shift a pure row permutation of the analysis rows,
+    which is what lets the standardisation and the right-hand covariance be
+    computed once instead of per permutation.
+    """
+
+    included = episode_mask.bool()
+    return bool(sample_mask[:, included].all()) and not bool(sample_mask[:, ~included].any())
+
+
+def _whole_episode_null(
+    left: torch.Tensor,
+    right_series: torch.Tensor,
+    episode_mask: torch.Tensor,
+    shifts: torch.Tensor,
+    config: PaperPLSCConfig,
+    tracker: ProgressTracker,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    included = torch.nonzero(episode_mask, as_tuple=False).flatten()
+    time = right_series.shape[0]
+    samples = left.shape[0]
+    # A circular shift permutes rows, so both the standardisation and the
+    # right-hand covariance are invariant across permutations.
+    right = _standardize(right_series[:, included].reshape(-1, right_series.shape[2]))[0]
+    right = right.reshape(time, int(included.numel()), -1)
+    left_by_episode = left.reshape(time, int(included.numel()), -1)
+    left_covariance = left.T @ left / (samples - 1)
+    right_flat = right.reshape(-1, right.shape[2])
+    right_covariance = right_flat.T @ right_flat / (samples - 1)
+
+    rank = min(left.shape[1], right.shape[2])
+    covariance = torch.empty(config.permutations, rank, dtype=left.dtype, device=left.device)
     pcc = torch.empty_like(covariance)
-    generator = torch.Generator().manual_seed(config.seed)
+    if config.null_algorithm == "fft":
+        # One transform pair per episode covers every lag, so the whole shift
+        # matrix is assembled in a single pass.
+        assembled = _cross_by_correlation(left_by_episode, right, shifts) / (samples - 1)
+    else:
+        assembled = None
+    chunk = _permutation_chunk(time, right.shape[2], config)
     completed = 0
     while completed < config.permutations:
-        batch = min(config.null_batch_size, config.permutations - completed)
+        size = min(chunk, config.permutations - completed)
+        if assembled is None:
+            cross = _cross_by_roll(
+                left_by_episode, right, shifts[completed : completed + size]
+            ) / (samples - 1)
+        else:
+            cross = assembled[completed : completed + size]
+        left_basis, singular, right_vh = torch.linalg.svd(cross, full_matrices=False)
+        covariance[completed : completed + size] = singular
+        pcc[completed : completed + size] = _quadratic_form_pcc(
+            singular, left_basis, right_vh, left_covariance, right_covariance
+        )
+        completed += size
+        tracker.emit(completed)
+    return covariance, pcc
+
+
+def _quadratic_form_pcc(
+    singular: torch.Tensor,
+    left_basis: torch.Tensor,
+    right_vh: torch.Tensor,
+    left_covariance: torch.Tensor,
+    right_covariance: torch.Tensor,
+) -> torch.Tensor:
+    """Correlation between projected scores, without projecting the samples.
+
+    For z-scored inputs the k-th score covariance is the k-th singular value and
+    each score variance is a quadratic form in the fixed sample covariances, so
+    the per-permutation cost drops from two sample-sized products to two small
+    matrix products.
+    """
+
+    left_variance = torch.einsum(
+        "bdk,de,bek->bk", left_basis, left_covariance, left_basis
+    )
+    right_variance = torch.einsum(
+        "bkd,de,bke->bk", right_vh, right_covariance, right_vh
+    )
+    denominator = (left_variance * right_variance).clamp_min(1e-24).sqrt()
+    return singular / denominator
+
+
+def _cross_by_roll(
+    left_by_episode: torch.Tensor,
+    right: torch.Tensor,
+    shifts: torch.Tensor,
+) -> torch.Tensor:
+    """Assemble shifted cross-covariances one episode at a time.
+
+    Accumulating per episode keeps the rolled copy to one episode's worth of
+    samples while leaving the product itself to BLAS.
+    """
+
+    time, episodes, width = right.shape
+    steps = torch.arange(time, device=right.device)
+    total = torch.zeros(
+        shifts.shape[0],
+        left_by_episode.shape[2],
+        width,
+        dtype=left_by_episode.dtype,
+        device=right.device,
+    )
+    for position in range(episodes):
+        index = (steps[None, :] - shifts[:, position, None]) % time
+        rolled = right[:, position][index]
+        total += torch.einsum("td,btw->bdw", left_by_episode[:, position], rolled)
+    return total
+
+
+def _cross_by_correlation(
+    left_by_episode: torch.Tensor,
+    right: torch.Tensor,
+    shifts: torch.Tensor,
+) -> torch.Tensor:
+    """Assemble shifted cross-covariances from circular cross-correlations.
+
+    Rolling one episode by s and multiplying is a circular correlation in time,
+    so one FFT pair per episode yields every lag at once and each permutation
+    becomes a lookup and a sum instead of a sample-sized matrix product.
+    """
+
+    time, episodes, width = right.shape
+    depth = left_by_episode.shape[2]
+    permutations = shifts.shape[0]
+    total = torch.zeros(
+        permutations, depth, width, dtype=left_by_episode.dtype, device=right.device
+    )
+    window = max(1, (64 * 1024 * 1024) // max(depth * width * 8, 1))
+    for position in range(episodes):
+        left_spectrum = torch.fft.rfft(left_by_episode[:, position], dim=0)
+        right_spectrum = torch.fft.rfft(right[:, position], dim=0)
+        lags = torch.fft.irfft(
+            left_spectrum[:, :, None] * right_spectrum.conj()[:, None, :], n=time, dim=0
+        )
+        for start in range(0, permutations, window):
+            stop = min(start + window, permutations)
+            total[start:stop] += lags[shifts[start:stop, position]]
+    return total
+
+
+def _permutation_chunk(time: int, width: int, config: PaperPLSCConfig) -> int:
+    """Permutations per assembled block, bounded by a working-set budget."""
+
+    if config.null_algorithm == "fft":
+        # The cross tensor is already assembled; only the batched SVD is chunked.
+        return max(1, min(config.permutations, 512))
+    # The roll path holds one episode of rolled samples per permutation.
+    budget = 128 * 1024 * 1024
+    per_permutation = time * width * 8
+    return max(
+        config.null_batch_size,
+        min(config.permutations, budget // max(per_permutation, 1)),
+    )
+
+
+def _masked_null(
+    left: torch.Tensor,
+    right_series: torch.Tensor,
+    sample_mask: torch.Tensor,
+    episode_mask: torch.Tensor,
+    shifts: torch.Tensor,
+    config: PaperPLSCConfig,
+    tracker: ProgressTracker,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Fallback for analyses that drop samples inside an episode.
+
+    Dropping samples makes the retained rows depend on the shift, so neither the
+    standardisation nor the right-hand covariance can be reused.
+    """
+
+    included = torch.nonzero(episode_mask, as_tuple=False).flatten()
+    rank = min(left.shape[1], right_series.shape[2])
+    covariance = torch.empty(config.permutations, rank, dtype=left.dtype, device=left.device)
+    pcc = torch.empty_like(covariance)
+    completed = 0
+    while completed < config.permutations:
+        size = min(config.null_batch_size, config.permutations - completed)
         candidates = torch.stack(
             [
-                _shift_episodes(
-                    right_series,
-                    episode_mask,
-                    config.min_shift,
-                    generator,
-                )[sample_mask]
-                for _ in range(batch)
+                _shift_episodes(right_series, included, shifts[completed + offset])[sample_mask]
+                for offset in range(size)
             ]
         )
         candidate_mean = candidates.mean(dim=1, keepdim=True)
@@ -414,33 +619,21 @@ def _circular_shift_null(
         left_basis, singular, right_vh = torch.linalg.svd(cross, full_matrices=False)
         left_scores = torch.einsum("nd,bdr->bnr", left, left_basis)
         right_scores = torch.einsum("bne,bre->bnr", right, right_vh)
-        covariance[completed : completed + batch] = singular
-        pcc[completed : completed + batch] = _batched_column_pcc(
-            left_scores, right_scores
-        )
-        completed += batch
+        covariance[completed : completed + size] = singular
+        pcc[completed : completed + size] = _batched_column_pcc(left_scores, right_scores)
+        completed += size
         tracker.emit(completed)
     return covariance, pcc
 
 
 def _shift_episodes(
     series: torch.Tensor,
-    episode_mask: torch.Tensor,
-    min_shift: int,
-    generator: torch.Generator,
+    included: torch.Tensor,
+    shifts: torch.Tensor,
 ) -> torch.Tensor:
     result = series.clone()
-    time = series.shape[0]
-    for episode in torch.nonzero(episode_mask, as_tuple=False).flatten().tolist():
-        shift = int(
-            torch.randint(
-                min_shift,
-                time - min_shift + 1,
-                (),
-                generator=generator,
-            )
-        )
-        result[:, episode] = torch.roll(series[:, episode], shift, dims=0)
+    for position, episode in enumerate(included.tolist()):
+        result[:, episode] = torch.roll(series[:, episode], int(shifts[position]), dims=0)
     return result
 
 
