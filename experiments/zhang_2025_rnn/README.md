@@ -15,18 +15,40 @@ available separately as a protocol-sensitivity study.
 - `social` and `non_social` conditions.
 - 10×10 grid, physical 7×7 FOV, spawn coordinates `0..8`.
 - Independent 256-unit vanilla ReLU RNN chaser and explorer.
-- Fast PPO: one full 4,000-timestep recurrent batch per agent/update, recurrent
-  L2 `0.3`, and a predeclared 2,000-update analysis checkpoint.
+- Fast PPO: one full 4,000-timestep recurrent batch per agent/update, learning
+  rate `1e-3`, recurrent L2 `0.3`, and a predeclared 4,500-update analysis
+  checkpoint.
 - Confirmatory seeds `100..109`, disjoint from development and historical
   `0..9` runs.
 - Random-opponent behavior, paper PLSC, identical-action and non-social vision
   controls, diagnostic grouped linear SVM, and paired causal interventions.
 - Nature absolute values are comparison references, never hard tolerances.
 
-The confirmatory plan has 20 units, 160 million environment steps, and 80,000
+The confirmatory plan has 20 units, 360 million environment steps, and 180,000
 optimizer steps in total. The optional protocol-sensitivity plan has the same
 1.6 billion environment steps and 816 million optimizer steps as the expensive
 30-epoch interpretation.
+
+## Learning rate
+
+The released `5e-5` does not train on this code path: after 2,000 updates both
+policies sit at maximum entropy, and collisions, partner-in-vision, and distance
+all stay at the uniform-policy baseline in both conditions. At `1e-3` the
+published separation appears — a CPU run of 10 seeds per condition reaches 14.0
+versus 3.2 collisions, 79.0% versus 34.7% partner-in-vision, and 2.73 versus
+5.17 average distance, against Nature's 16.1/3.2, 86.4%/36.2%, and 3.04/6.44.
+`PROTOCOL_PPO` keeps `5e-5` because its 30 epochs over 128-sample minibatches
+take roughly 470x more optimizer steps per update.
+
+## Cost
+
+Training is the cheap stage: 20 units of 4,500 updates finish in about 11
+minutes on an 18-core CPU with `OMP_NUM_THREADS=1 --parallelism 20`, and the
+behavior and causal stages take about a minute each. The neural stage is
+dominated by the diagnostic decoder, which costs roughly 20 minutes per
+visibility per unit at the declared 200 shuffled controls; it never feeds a
+gate, so its `shuffled_controls` is the knob to turn when the stage has to fit
+a time budget.
 
 ## Development checkpoint selection
 
@@ -52,6 +74,18 @@ advantage; positive values point in the target social-behavior direction.
 If the predeclared checkpoint changes, edit `CONFIRMATORY_UPDATE` in `study.py`
 before any confirmatory run and rerun the plan/tests. Never select a checkpoint
 from confirmatory PLSC or causal outcomes.
+
+The development sweep is also the input the Figure 5 layout was designed for,
+because it evaluates behavior at ten checkpoints:
+
+```bash
+uv run mrr figures fig5 runs/zhang-2025-rnn-development \
+  --output runs/zhang-2025-rnn-development/figures
+```
+
+The confirmatory definition evaluates behavior at one predeclared checkpoint, so
+its `i`-`n` curves collapse to a single point and its `o`/`p` panels share that
+checkpoint; the figure manifest records this rather than hiding it.
 
 ## Confirmatory run
 
@@ -81,7 +115,7 @@ uv run mrr study run experiments.zhang_2025_rnn.study:definition \
   --device cuda --backend triton --parallelism 10 --stage causal --resume
 ```
 
-The neural stage runs only the frozen 2,000-update checkpoint. It produces 40
+The neural stage runs only the frozen 4,500-update checkpoint. It produces 40
 neural rollouts and 50 PLSC fits: one primary fit per rollout plus
 identical-action fits for the 10 social rollouts. Diagnostic decoders run only
 for the 20 primary-visibility rollouts. The protocol study would otherwise
@@ -121,9 +155,9 @@ runs/zhang-2025-rnn-confirmatory/
     nature_comparison.parquet
   units/{social,non_social}/seed_XXXX/
     train/checkpoints/*.safetensors
-    behavior/update_002000/{matchup}/
+    behavior/update_004500/{matchup}/
       tensors.safetensors, episodes.parquet, manifest.json
-    neural/update_002000/{none,partial,full}/
+    neural/update_004500/{none,partial,full}/
       rollout/{tensors.safetensors,episodes.parquet,manifest.json}
       plsc/{subspace.safetensors,spectrum.parquet,manifest.json}
       plsc_identical_action_excluded/

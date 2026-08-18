@@ -30,10 +30,19 @@ from mouse_run_run.studies.types import (
 )
 
 
-CONFIRMATORY_UPDATE = 2_000
+# Selected globally from the development sweep: every social-behavior contrast
+# is positive from 500 updates on, the chaser contrasts are still rising at
+# 5,000, and both explorer contrasts peak at 4,500.
+CONFIRMATORY_UPDATE = 4_500
 
+# One full recurrent batch per agent per update. The learning rate is 1e-3
+# rather than the released 5e-5: at 5e-5 both policies sit at maximum entropy
+# after 2,000 updates, with collisions, partner-in-vision, and distance all at
+# the uniform-policy baseline, while 1e-3 reproduces the published behavioural
+# separation. PROTOCOL_PPO keeps the released value, where 30 epochs over small
+# minibatches take ~470x more optimizer steps per update.
 GOAL_DIRECTED_PPO = PPOConfig(
-    learning_rate=5e-5,
+    learning_rate=1e-3,
     gamma=0.99,
     gae_lambda=1.0,
     epochs=1,
@@ -253,3 +262,4 @@ smoke_definition = _make_definition(
     ),
     smoke=True,
 )
+

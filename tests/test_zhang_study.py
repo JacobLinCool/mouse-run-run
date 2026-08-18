@@ -15,7 +15,10 @@ from experiments.zhang_2025_rnn.study import (
 )
 from mouse_run_run.artifacts.rollout import load_rollout
 from mouse_run_run.studies.runner import plan_study, run_study
-from tests.fixtures.zhang_study import development_smoke_definition
+from tests.fixtures.zhang_study import (
+    confirmatory_smoke_definition,
+    development_smoke_definition,
+)
 
 
 TARGET = "experiments.zhang_2025_rnn.study:smoke_definition"
@@ -29,16 +32,16 @@ def test_confirmatory_plan_is_goal_directed_and_uses_one_fixed_checkpoint() -> N
     assert plan["purpose"] == "confirmatory"
     assert plan["seeds"] == list(range(100, 110))
     assert plan["units"] == 20
-    assert plan["environment_steps_per_unit"] == 8_000_000
-    assert plan["total_environment_steps"] == 160_000_000
+    assert plan["environment_steps_per_unit"] == 18_000_000
+    assert plan["total_environment_steps"] == 360_000_000
     assert plan["optimizer_minibatches_per_agent_update"] == 1
     assert plan["optimizer_steps_per_update"] == 2
-    assert plan["total_optimizer_steps"] == 80_000
-    assert plan["checkpoint_updates"] == [500, 1_000, 1_500, 2_000]
-    assert plan["recipes"]["behavior"]["checkpoint_updates"] == [2_000]
-    assert plan["recipes"]["neural"]["checkpoint_updates"] == [2_000]
+    assert plan["total_optimizer_steps"] == 180_000
+    assert plan["checkpoint_updates"] == list(range(500, 4_501, 500))
+    assert plan["recipes"]["behavior"]["checkpoint_updates"] == [4_500]
+    assert plan["recipes"]["neural"]["checkpoint_updates"] == [4_500]
     assert plan["estimated_artifacts"] == {
-        "training_checkpoints_including_latest": 100,
+        "training_checkpoints_including_latest": 200,
         "random_opponent_rollouts": 40,
         "neural_rollouts": 40,
         "paper_plsc_fits_including_identical_action_controls": 50,
@@ -128,6 +131,32 @@ def test_development_smoke_runs_only_enabled_stages_and_pairs_checkpoints(
         first.world["explorer_position"][0],
         second.world["explorer_position"][0],
     )
+
+
+CONFIRMATORY_SMOKE_TARGET = (
+    "tests.fixtures.zhang_study:confirmatory_smoke_definition"
+)
+
+
+def test_gate_readers_key_behavior_rows_by_unit_seed(tmp_path: Path) -> None:
+    output = tmp_path / "confirmatory"
+    result = run_study(
+        CONFIRMATORY_SMOKE_TARGET,
+        confirmatory_smoke_definition,
+        output=output,
+        device="cpu",
+        backend="torch",
+        parallelism=1,
+        stage="all",
+        resume=False,
+    )
+    behavior = pq.read_table(output / "tables" / "behavior.parquet").to_pylist()
+    assert {row["seed"] for row in behavior} == set(confirmatory_smoke_definition.seeds)
+    # The rollout stream keeps its own identity instead of overwriting the unit.
+    assert {row["rollout_seed"] for row in behavior} != {row["seed"] for row in behavior}
+    gates = json.loads((output / "gates.json").read_text())["gates"]
+    assert gates["behavior"] in ("SUPPORTED", "FAILED")
+    assert result.report.is_file()
 
 
 def test_tiny_cpu_study_runs_every_stage_and_keeps_gates_not_run(

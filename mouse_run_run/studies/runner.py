@@ -691,13 +691,16 @@ def _annotated_episode_rows(
     matchup: str,
     checkpoint: int,
 ) -> list[dict[str, Any]]:
+    # Unit identity is written last: the episode table carries its own "seed"
+    # column for the rollout stream, which must not become the unit seed.
     return [
         {
+            **row,
+            "rollout_seed": row.get("seed"),
             "condition": unit.condition,
             "seed": unit.seed,
             "checkpoint_update": checkpoint,
             "matchup": matchup,
-            **row,
         }
         for row in artifact.episodes.to_pylist()
     ]
@@ -805,11 +808,11 @@ def _aggregate_stage(output: Path, definition: StudyDefinition, stage: str) -> N
                             pa.Table.from_pylist(
                             [
                                 {
+                                    **row,
                                     "condition": unit.condition,
                                     "seed": unit.seed,
                                     "checkpoint_update": update,
                                     "visibility": visibility,
-                                    **row,
                                 }
                                 for row in table.to_pylist()
                             ]
