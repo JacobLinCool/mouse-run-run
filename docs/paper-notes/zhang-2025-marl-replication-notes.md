@@ -185,9 +185,47 @@ Official code:
   - `--num-gpus` default `1`.
 - Demo `params.json` files show `l2_lambda = 3.0`, `kl_coeff = 0.2`, `rnn_hidden_size = 256`, and `num_workers = 7`.
 
+### What the released config actually pins (read 2026-08-18)
+
+`Demo/Trained_model_examples/model1/params.json` is a partial RLlib config dump
+with exactly 12 overridden keys:
+
+`clip_param 0.3`, `kl_coeff 0.2`, `grad_clip null`, `framework torch`,
+`num_gpus 1`, `num_workers 7`, `env_config {height 10, width 10, ts 100}`,
+`model {custom_model rnn_noFC, fc_size 200, l2_lambda 3.0, l2_lambda_inp 0.0,
+rnn_hidden_size 256, max_seq_len 20}`, `multiagent`, `callbacks`, `env`,
+`_fake_gpus`.
+
+Every optimizer setting is therefore an inherited RLlib 2.2.0 PPO default, read
+from `ray-2.2.0/rllib/algorithms/ppo/ppo.py`:
+
+| Setting | Value | Source line |
+| --- | --- | --- |
+| `lr` | `5e-5` | 107 |
+| `num_sgd_iter` | `30` | 94 |
+| `sgd_minibatch_size` | `128` | 93 |
+| `train_batch_size` | `4000` | 106 |
+| `lambda_` | `1.0` | 91 |
+| `kl_target` | `0.01` | 102 |
+| `vf_clip_param` | `10.0` | 100 |
+| `vf_loss_coeff` | `1.0` | 96 |
+| `entropy_coeff` | `0.0` | 97 |
+
+Two consequences:
+
+- The learning rate appears in neither the paper nor the training CLI. `5e-5`
+  is what the released runs used, but only as a default that comes paired with
+  30 SGD epochs over 128-sample minibatches. Our `GOAL_DIRECTED_PPO` keeps one
+  full-batch epoch per update, roughly 470x fewer optimizer steps, so it needs
+  a compensating learning rate; `1e-3` reproduces the behavioural separation
+  that `5e-5` does not. `PROTOCOL_PPO` keeps the released pairing intact.
+- The default `train_batch_size = 4000` is exactly the paper's "4,000
+  environment steps per epoch from 40 complete episodes", which corroborates
+  that the batch settings were left at their defaults rather than tuned.
+
 Open implementation questions:
 
-- Paper says L2 `lambda = 0.3`, while official code defaults and demo params show `3.0`. We should resolve this before claiming exact reproduction.
+- Paper says L2 `lambda = 0.3`, while official code defaults and demo params show `3.0`. The released `params.json` confirms the trained demo models used `3.0`; our study uses the paper's `0.3`. We should resolve this before claiming exact reproduction.
 - Paper says 20,000 epochs; official script default is 2,000 iterations, but evaluation code expects `checkpoint-020000`. For paper-faithful reproduction, use 20,000.
 - RLlib default parameters are version-sensitive. Exact reproduction should use Ray 2.2.0, not current latest Ray.
 
@@ -314,6 +352,26 @@ Metrics:
 Control:
 
 - Remove comparable random non-overlapping variance using top 25 random principal components from temporally permuted activity.
+
+## What The Released Analysis Code Covers
+
+`hongw-lab/code_for_2024_zhang-phi` is 12 MATLAB files, all written for the
+animal data. Its README groups them as:
+
+- **PLSC** — `plsc.m` (the transformation), `computeSharedNullDistribution.m`
+  (null distribution and significant-dimension count), `getNeuralSpace.m`
+  (shared and unique spaces). With `Utils/tempShift.m` and `Utils/timePermute.m`
+  this is the direct source for our `analyses/paper_plsc.py`, and the one method
+  where a line-by-line numerical comparison is possible.
+- **CCA behaviour space** — `computeCoordNullDistribution.m`,
+  `getBehaviorSpace.m`.
+- **ROC** — `simulateROC.m`, `simulateROC_Wrapper.m`.
+- **Non-redundant variance via PLSR** — `computeNonRedundantVar.m`.
+
+Not released anywhere, and therefore reconstructed here from the paper text:
+the agent-side neural analyses (SVM decoding of the artificial agents, the
+Fig. 5o-r movement geometry), the causal readout and recurrent interventions,
+all figure code, and the glue that carries RLlib checkpoints into analysis.
 
 ## Current PyTorch Port Status
 
