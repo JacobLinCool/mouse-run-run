@@ -8,12 +8,9 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
-from sklearn.metrics import balanced_accuracy_score
 from sklearn.model_selection import StratifiedGroupKFold
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import LinearSVC
 
+from mouse_run_run.analyses import linear_svm
 from mouse_run_run.artifacts.rollout import RolloutArtifact
 from mouse_run_run.core.progress import ProgressSink, ProgressTracker, TerminalProgress
 from mouse_run_run.core.types import AgentId
@@ -133,13 +130,17 @@ def _decode_one(
         folds=config.folds,
         seed=config.seed,
     )
-    observed = _cross_validated_score(values, binary, splits)
     generator = torch.Generator().manual_seed(config.seed)
-    controls = []
-    for _ in range(config.shuffled_controls):
-        shuffled = binary[torch.randperm(binary.numel(), generator=generator)]
-        controls.append(_cross_validated_score(values, shuffled, splits))
-    null = torch.tensor(controls, dtype=torch.float64)
+    label_sets = torch.stack(
+        [binary]
+        + [
+            binary[torch.randperm(binary.numel(), generator=generator)]
+            for _ in range(config.shuffled_controls)
+        ]
+    )
+    scores = _batched_scores(values, label_sets, splits)
+    observed = float(scores[0])
+    null = scores[1:].double()
     p_value = float((1 + (null >= observed).sum()) / (config.shuffled_controls + 1))
     return {
         "agent": str(agent_id),
@@ -158,22 +159,36 @@ def _decode_one(
     }
 
 
-def _cross_validated_score(
+def _batched_scores(
     values: torch.Tensor,
-    labels: torch.Tensor,
+    label_sets: torch.Tensor,
     splits: list[tuple[torch.Tensor, torch.Tensor]],
-) -> float:
-    predictions = torch.empty_like(labels)
+) -> torch.Tensor:
+    """Cross-validated balanced accuracy for every label set in one pass.
+
+    The folds and the design matrix are shared, so each fold fits all label sets
+    together instead of repeating the same standardisation and factorisation per
+    shuffle.
+    """
+
+    features = values.double()
+    predictions = torch.empty_like(label_sets)
+    degenerate = torch.zeros(label_sets.shape[0], dtype=torch.bool)
     for train, test in splits:
-        if torch.unique(labels[train]).numel() < 2:
-            return 0.5
-        model = make_pipeline(
-            StandardScaler(),
-            LinearSVC(class_weight="balanced", dual="auto", random_state=0),
+        train_labels = label_sets[:, train]
+        degenerate |= train_labels.amin(dim=1) == train_labels.amax(dim=1)
+        train_features, test_features = linear_svm.standardize(
+            features[train], features[test]
         )
-        model.fit(values[train].numpy(), labels[train].numpy())
-        predictions[test] = torch.from_numpy(model.predict(values[test].numpy()))
-    return float(balanced_accuracy_score(labels.numpy(), predictions.numpy()))
+        train_features = linear_svm.with_intercept(train_features)
+        test_features = linear_svm.with_intercept(test_features)
+        weights = linear_svm.balanced_weights(train_labels, 1.0)
+        coefficients = linear_svm.fit_squared_hinge(train_features, train_labels, weights)
+        predictions[:, test] = linear_svm.predict(test_features, coefficients)
+    scores = linear_svm.balanced_accuracy(label_sets, predictions).double()
+    # A fold whose training half holds one class cannot be fitted; the score for
+    # that label set is chance, exactly as the per-fit path reported.
+    return torch.where(degenerate, torch.full_like(scores, 0.5), scores)
 
 
 def _targets(agent_id: AgentId) -> dict[str, str]:
