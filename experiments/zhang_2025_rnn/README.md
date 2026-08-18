@@ -31,14 +31,18 @@ optimizer steps in total. The optional protocol-sensitivity plan has the same
 
 ## Learning rate
 
-The released `5e-5` does not train on this code path: after 2,000 updates both
-policies sit at maximum entropy, and collisions, partner-in-vision, and distance
-all stay at the uniform-policy baseline in both conditions. At `1e-3` the
-published separation appears — a CPU run of 10 seeds per condition reaches 14.0
-versus 3.2 collisions, 79.0% versus 34.7% partner-in-vision, and 2.73 versus
-5.17 average distance, against Nature's 16.1/3.2, 86.4%/36.2%, and 3.04/6.44.
-`PROTOCOL_PPO` keeps `5e-5` because its 30 epochs over 128-sample minibatches
-take roughly 470x more optimizer steps per update.
+Neither the paper nor the released training CLI states a learning rate. The
+released runs inherited RLlib 2.2.0's PPO default of `5e-5`, which that library
+pairs with 30 SGD epochs over 128-sample minibatches; the released
+`params.json` overrides neither. Fast PPO collapses those into one full-batch
+epoch per update, roughly 470x fewer optimizer steps, so it cannot keep the
+same rate: at `5e-5` both policies sit at maximum entropy after 2,000 updates,
+with collisions, partner-in-vision, and distance all at the uniform-policy
+baseline in both conditions. At `1e-3` the published separation appears — a CPU
+run of 10 seeds per condition reaches 14.0 versus 3.2 collisions, 79.0% versus
+34.7% partner-in-vision, and 2.73 versus 5.17 average distance, against
+Nature's 16.1/3.2, 86.4%/36.2%, and 3.04/6.44. `PROTOCOL_PPO` keeps the
+released pairing intact.
 
 ## Cost
 

@@ -35,12 +35,15 @@ from mouse_run_run.studies.types import (
 # 5,000, and both explorer contrasts peak at 4,500.
 CONFIRMATORY_UPDATE = 4_500
 
-# One full recurrent batch per agent per update. The learning rate is 1e-3
-# rather than the released 5e-5: at 5e-5 both policies sit at maximum entropy
-# after 2,000 updates, with collisions, partner-in-vision, and distance all at
-# the uniform-policy baseline, while 1e-3 reproduces the published behavioural
-# separation. PROTOCOL_PPO keeps the released value, where 30 epochs over small
-# minibatches take ~470x more optimizer steps per update.
+# One full recurrent batch per agent per update. Neither the paper nor the
+# released training CLI states a learning rate: the released runs inherited
+# RLlib 2.2.0's PPO default of 5e-5, which comes paired with that library's 30
+# SGD epochs over 128-sample minibatches. Collapsing those into a single
+# full-batch epoch drops roughly 470x of the optimizer steps per update, so the
+# rate has to rise with it — at 5e-5 both policies sit at maximum entropy after
+# 2,000 updates with every behavioural metric at the uniform-policy baseline,
+# while 1e-3 reproduces the published separation. PROTOCOL_PPO keeps the
+# released pairing intact.
 GOAL_DIRECTED_PPO = PPOConfig(
     learning_rate=1e-3,
     gamma=0.99,
