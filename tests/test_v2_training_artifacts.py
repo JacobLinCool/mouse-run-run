@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tomllib
 
@@ -75,6 +76,42 @@ def test_rollout_round_trip_uses_safetensors_and_parquet(tmp_path: Path) -> None
     assert (artifact.path / "episodes.parquet").is_file()
     assert loaded.trajectory.batch_size == 3
     assert loaded.trajectory.world["chaser_position"].shape[:2] == (5, 3)
+
+
+BEHAVIOR_METRIC_KEYS = (
+    "event.collision",
+    "event_fraction.chaser_partner_visible",
+    "event_fraction.explorer_partner_visible",
+    "world.distance_mean",
+)
+
+
+def test_training_metrics_record_fov_collision_and_distance(tmp_path: Path) -> None:
+    experiment = _experiment(2)
+    trained = train_experiment(
+        experiment,
+        runtime=RuntimeConfig(batch_size=2, seed=5),
+        run_dir=tmp_path / "run",
+    )
+    rows = [
+        json.loads(line)
+        for line in (trained.run_dir / "metrics.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 2
+    for key in BEHAVIOR_METRIC_KEYS:
+        assert all(isinstance(row[key], float) for row in rows)
+        assert key in trained.metrics
+    artifact = collect_experiment_rollout(
+        experiment,
+        trained.checkpoint,
+        tmp_path / "rollout",
+        runtime=RuntimeConfig(batch_size=2, seed=6),
+        episodes=2,
+        horizon=4,
+        deterministic=True,
+    )
+    # Training curves and evaluation tables must stay comparable key by key.
+    assert set(BEHAVIOR_METRIC_KEYS) <= set(artifact.episodes.column_names)
 
 
 def test_v2_checkpoint_reader_rejects_unversioned_safetensors(tmp_path: Path) -> None:

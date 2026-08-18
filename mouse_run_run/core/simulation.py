@@ -56,6 +56,33 @@ class TrajectoryBatch:
         return self.terminated.shape[1]
 
 
+def episode_behavior_summary(trajectory: TrajectoryBatch) -> dict[str, torch.Tensor]:
+    """Per-episode behaviour columns shared by rollout tables and training metrics.
+
+    Event counts are summed over the horizon, boolean events also become the
+    fraction of active steps they held, and a recorded ``distance`` world signal
+    contributes its active-step mean and final value.
+    """
+
+    columns: dict[str, torch.Tensor] = {}
+    active_count = trajectory.active.sum(dim=0).clamp_min(1)
+    for key, value in trajectory.events.items():
+        if value.ndim != 2:
+            continue
+        columns[f"event.{key}"] = value.to(torch.float64).sum(dim=0)
+        if value.dtype == torch.bool:
+            columns[f"event_fraction.{key}"] = (
+                (value & trajectory.active).sum(dim=0) / active_count
+            )
+    if "distance" in trajectory.world:
+        distance = trajectory.world["distance"][:-1]
+        columns["world.distance_mean"] = (
+            (distance * trajectory.active).sum(dim=0) / active_count
+        )
+        columns["world.distance_final"] = trajectory.world["distance"][-1]
+    return columns
+
+
 class SimulationEngine:
     def __init__(
         self,

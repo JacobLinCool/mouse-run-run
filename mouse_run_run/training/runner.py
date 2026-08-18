@@ -13,7 +13,12 @@ from torch.utils.tensorboard import SummaryWriter
 from mouse_run_run.artifacts.checkpoint import load_checkpoint, save_checkpoint
 from mouse_run_run.core.experiment import Experiment, PolicyBuildContext, RuntimeConfig
 from mouse_run_run.core.progress import ProgressSink, ProgressTracker, StatusFileProgress, TerminalProgress
-from mouse_run_run.core.simulation import SimulationConfig, SimulationEngine
+from mouse_run_run.core.simulation import (
+    SimulationConfig,
+    SimulationEngine,
+    TrajectoryBatch,
+    episode_behavior_summary,
+)
 from mouse_run_run.core.types import AgentId
 from mouse_run_run.training.ppo import IndependentPPO
 
@@ -90,10 +95,12 @@ def train_experiment(
                     deterministic=False,
                     seed=runtime.seed + update - 1,
                     action_seed=runtime.seed + 1_000_000 + update - 1,
+                    record_world=True,
                 )
             )
+            behavior_metrics = _behavior_metrics(rollout)
             ppo_metrics = learner.update(rollout)
-            metrics = ppo_metrics.flat()
+            metrics = {**ppo_metrics.flat(), **behavior_metrics}
             _append_metric(metrics_path, {"update": update, **metrics})
             for key, value in metrics.items():
                 writer.add_scalar(key, value, update)
@@ -138,6 +145,15 @@ def train_experiment(
         completed_updates=experiment.training.updates,
         metrics=metrics,
     )
+
+
+def _behavior_metrics(rollout: TrajectoryBatch) -> dict[str, float]:
+    """Batch means of the same behaviour columns the rollout tables report."""
+
+    return {
+        key: float(column.to(torch.float64).mean())
+        for key, column in episode_behavior_summary(rollout).items()
+    }
 
 
 def _build_policies(

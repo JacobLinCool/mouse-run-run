@@ -13,7 +13,11 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
-from mouse_run_run.core.simulation import AgentTrajectory, TrajectoryBatch
+from mouse_run_run.core.simulation import (
+    AgentTrajectory,
+    TrajectoryBatch,
+    episode_behavior_summary,
+)
 from mouse_run_run.core.types import AgentId
 
 
@@ -310,21 +314,8 @@ def _episode_table(
     }
     for agent_id, agent in trajectory.agents.items():
         rows[f"return.{agent_id}"] = agent.rewards.sum(dim=0).tolist()
-    for key, value in trajectory.events.items():
-        if value.ndim == 2:
-            rows[f"event.{key}"] = value.to(torch.float64).sum(dim=0).tolist()
-            if value.dtype == torch.bool:
-                active_count = trajectory.active.sum(dim=0).clamp_min(1)
-                rows[f"event_fraction.{key}"] = (
-                    (value & trajectory.active).sum(dim=0) / active_count
-                ).tolist()
-    if "distance" in trajectory.world:
-        distance = trajectory.world["distance"][:-1]
-        active_count = trajectory.active.sum(dim=0).clamp_min(1)
-        rows["world.distance_mean"] = (
-            (distance * trajectory.active).sum(dim=0) / active_count
-        ).tolist()
-        rows["world.distance_final"] = trajectory.world["distance"][-1].tolist()
+    for key, column in episode_behavior_summary(trajectory).items():
+        rows[key] = column.tolist()
     stuck_runs = _longest_noncollision_stuck_runs(trajectory)
     rows["quality.longest_noncollision_stuck_run"] = stuck_runs.tolist()
     rows["quality.degenerate"] = (stuck_runs > 5).tolist()
