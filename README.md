@@ -31,7 +31,7 @@ The default experiment lives in [`experiments/chase_grid`](experiments/chase_gri
 - `analyses.py` / `interventions.py` — experiment-specific analysis recipes.
 
 The reusable machinery is under `mouse_run_run/core`, `training`, `artifacts`,
-`analyses`, and `replay`.  Changing the chase environment, reward, or model does
+`analyses`, `figures`, and `replay`.  Changing the chase environment, reward, or model does
 not require editing the simulation or PPO loops.
 
 The goal-directed paper replication lives in
@@ -48,8 +48,8 @@ loading a model:
 uv run mrr study plan experiments.zhang_2025_rnn.study:definition
 ```
 
-It reports 20 fresh-seed units, 8,000,000 environment steps per unit,
-160,000,000 total steps, and 80,000 optimizer steps. Formal execution on the
+It reports 20 fresh-seed units, 18,000,000 environment steps per unit,
+360,000,000 total steps, and 180,000 optimizer steps. Formal execution on the
 NVIDIA host is:
 
 ```bash
@@ -115,6 +115,15 @@ uv run mrr train experiments.chase_grid.experiment:definition \
 
 Agents may use different models, but every agent owns an independent policy
 and optimizer.  The current learner is independent PPO.
+
+Each update appends PPO losses and the behaviour of the update's own rollout to
+`metrics.jsonl` and TensorBoard.  Behaviour keys match the rollout episode
+tables, so a training curve and an evaluation table are read the same way:
+`event.<name>` is the mean episode count, `event_fraction.<name>` the mean
+fraction of active steps, and `world.distance_mean` / `world.distance_final`
+the agent separation.  Field-of-view and collision therefore appear as
+`event_fraction.chaser_partner_visible`, `event_fraction.explorer_partner_visible`,
+and `event.collision`.
 
 ## Collect rollouts
 
@@ -206,6 +215,30 @@ synchronizes environment frames, actions, rewards, events, activation rasters,
 and PCA trajectories.  It never generates a new trajectory from a checkpoint.
 Repeat `--compare` to synchronize more than two causal conditions.
 
+## Paper figures
+
+A study output directory renders directly into the published Figure 5 layout:
+
+```bash
+uv run mrr figures fig5 runs/zhang-2025-rnn-development \
+  --output runs/zhang-2025-rnn-development/figures
+```
+
+Panels come from the artifacts a study already writes, never from TensorBoard
+event files: training curves (c-h) read each unit's `metrics.jsonl`,
+random-opponent panels (i-n) read `tables/behavior.parquet`, and the movement
+panels (o-r) read the stored behavior rollouts. Group comparisons use the same
+Torch permutation null as the PLSC and decoder analyses; with `n` seeds per
+group the smallest reachable p-value is fixed by the number of distinct splits,
+so small sweeps report `ns` by construction.
+
+`--box-checkpoint` selects the checkpoint the box plots summarize, and
+`--early-checkpoint` / `--late-checkpoint` select the two stages compared by the
+flow field, polar plot, and angle histogram; each defaults to the extremes of
+the checkpoints present in the behavior table. Every panel writes the numbers it
+draws to `source_data/*.parquet`, and `manifest.json` records the selections,
+the shared flow-arrow scale, and any panel that was skipped.
+
 ## Acceleration
 
 The environment backend is explicit:
@@ -226,6 +259,8 @@ environment semantic change must pass the seeded Torch/Triton parity test.
 - Episode and analysis tables use Parquet.
 - Operational progress uses terminal updates plus `status.json`; training
   metrics use JSONL.
+- Rendered figures are PNG/SVG next to the Parquet source data they were drawn
+  from; figures never read TensorBoard event files.
 - `.pt`, pickle, `torch.save`, legacy loaders, and schema fallbacks are not
   part of v2.
 

@@ -43,6 +43,8 @@ def main() -> None:
         _replay(args)
     elif args.command == "study":
         _study(args)
+    elif args.command == "figures":
+        _figures(args)
     else:  # pragma: no cover - argparse guarantees a registered command.
         raise AssertionError(args.command)
 
@@ -137,6 +139,28 @@ def _parser() -> argparse.ArgumentParser:
         default="all",
     )
     study_run.add_argument("--resume", action="store_true")
+
+    figures = commands.add_parser("figures", help="render paper figures from study artifacts")
+    figure_commands = figures.add_subparsers(dest="figure", required=True)
+    fig5 = figure_commands.add_parser("fig5", help="Zhang et al. (2025) Figure 5")
+    fig5.add_argument("study_output", type=Path)
+    fig5.add_argument("--output", type=Path, required=True)
+    fig5.add_argument("--box-checkpoint", type=int)
+    fig5.add_argument("--early-checkpoint", type=int)
+    fig5.add_argument("--late-checkpoint", type=int)
+    fig5.add_argument("--x-style", choices=("log", "linear"), default="log")
+    fig5.add_argument("--vision-radius", type=int, default=3)
+    fig5.add_argument("--polar-bins", type=int, default=12)
+    fig5.add_argument("--angle-bin-width", type=float, default=30.0)
+    fig5.add_argument("--permutations", type=int, default=10_000)
+    fig5.add_argument("--seed", type=int, default=0)
+    fig5.add_argument(
+        "--format",
+        dest="formats",
+        action="append",
+        choices=("png", "svg", "pdf"),
+        default=[],
+    )
     return parser
 
 
@@ -247,6 +271,34 @@ def _replay(args: argparse.Namespace) -> None:
         host=args.host,
         port=args.port,
     )
+
+
+def _figures(args: argparse.Namespace) -> None:
+    # Imported here so plotting dependencies stay off the path of every other
+    # command.
+    from mouse_run_run.figures.fig5 import Fig5Config, render_fig5
+
+    if args.figure != "fig5":  # pragma: no cover - argparse guarantees the name.
+        raise AssertionError(args.figure)
+    config = Fig5Config(
+        box_checkpoint=args.box_checkpoint,
+        early_checkpoint=args.early_checkpoint,
+        late_checkpoint=args.late_checkpoint,
+        x_style=args.x_style,
+        vision_radius=args.vision_radius,
+        polar_bins=args.polar_bins,
+        angle_bin_width=args.angle_bin_width,
+        permutations=args.permutations,
+        seed=args.seed,
+        formats=tuple(args.formats) or ("png", "svg"),
+    )
+    result = render_fig5(args.study_output, args.output, config=config)
+    for path in result.figure:
+        print(f"figure={path}")
+    print(f"source_data={len(result.source_data)} tables in {args.output / 'source_data'}")
+    print(f"manifest={result.manifest}")
+    for note in result.notes:
+        print(f"note: {note}")
 
 
 def _study(args: argparse.Namespace) -> None:
