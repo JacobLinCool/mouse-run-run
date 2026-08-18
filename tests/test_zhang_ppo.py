@@ -18,7 +18,7 @@ from mouse_run_run.training.ppo import (
 
 
 def test_goal_directed_ppo_is_one_full_batch_update_per_agent() -> None:
-    assert GOAL_DIRECTED_PPO.learning_rate == 5e-5
+    assert GOAL_DIRECTED_PPO.learning_rate == 1e-3
     assert GOAL_DIRECTED_PPO.gamma == 0.99
     assert GOAL_DIRECTED_PPO.gae_lambda == 1.0
     assert GOAL_DIRECTED_PPO.epochs == 1
