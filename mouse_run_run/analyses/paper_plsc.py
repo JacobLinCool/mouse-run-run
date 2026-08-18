@@ -255,6 +255,31 @@ def temporally_shifted_random_pc_basis(
     return _orthogonalize(candidates, shared, control_rank)
 
 
+def variance_matched_rank(
+    values: torch.Tensor,
+    subspace: StandardizedSubspace,
+    *,
+    target: float,
+) -> int:
+    """Smallest prefix of ``subspace`` whose removed variance reaches ``target``.
+
+    A control subspace is only comparable to the one under test when it removes a
+    comparable amount of variance. Basis columns are orthonormal, so the prefix
+    fractions are a cumulative sum and the whole curve costs one projection.
+    """
+
+    if not 0.0 < target <= 1.0:
+        raise ValueError("variance target must be in (0, 1]")
+    standardized = subspace.standardize(values.double())
+    projected = standardized @ subspace.basis
+    total = standardized.square().sum().clamp_min(1e-12)
+    fractions = projected.square().sum(dim=0).cumsum(dim=0) / total
+    reached = torch.nonzero(fractions >= target, as_tuple=False)
+    if reached.numel() == 0:
+        return int(subspace.basis.shape[1])
+    return int(reached[0]) + 1
+
+
 def removed_variance_fraction(
     values: torch.Tensor,
     subspace: StandardizedSubspace,
@@ -675,6 +700,11 @@ def _orthogonalize(
     if basis.shape[1] < rank:
         raise ValueError("temporally shifted random-PC candidates are rank deficient")
     basis = basis[:, :rank]
+    # One refinement pass: at high rank the factorisation leaves an overlap with
+    # the shared subspace that is numerical, not structural, and grows past the
+    # orthogonality check below.
+    if shared.numel():
+        basis, _ = torch.linalg.qr(basis - shared @ (shared.T @ basis), mode="reduced")
     if shared.numel() and not torch.allclose(
         shared.T @ basis,
         torch.zeros(shared.shape[1], rank, dtype=basis.dtype),

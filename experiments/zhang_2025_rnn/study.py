@@ -190,7 +190,10 @@ def _make_definition(
             horizon=8 if smoke else 100,
             batch_size=2 if smoke else 100,
             shared_rank=2 if smoke else 10,
-            random_control_rank=2 if smoke else 25,
+            # The control's rank is matched on removed variance; this bound only
+            # keeps the orthogonalisation away from the ill-conditioned tail of
+            # the shared complement.
+            random_control_max_rank=4 if smoke else 220,
         ),
         build_experiment=build,
         source=(
